@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# 项目特定：ABA 分析工具运行时产生的文件
+output/
+*.xlsx
+*.xls
+data/uploaded/
