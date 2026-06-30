@@ -1,5 +1,5 @@
 """
-ABA CSV 解析器（支持中文多列格式 + 全类目词库）
+ABA CSV 解析器（修复列名匹配 + 增强兜底逻辑）
 """
 
 import pandas as pd
@@ -21,9 +21,12 @@ from utils.constants import (
 # 列名检测
 # ============================================================
 def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
-    """自动检测列名映射（支持中英文）"""
+    """自动检测列名映射（支持中英文 + 模糊匹配）"""
     cols = df.columns.tolist()
     mapping = {}
+    
+    # 先清理列名中的空格
+    cleaned_cols = {col: col.strip() for col in cols}
     
     possible_mappings = {
         'search_term': ['Search Term', 'Search Term (Customer Search Term)', 
@@ -50,40 +53,44 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
             if std_name in mapping:
                 break
     
-    # 模糊匹配
+    # 模糊匹配（兜底）
     if 'search_term' not in mapping:
         for col in cols:
-            if '搜索' in col and '词' in col:
+            col_clean = col.strip()
+            if '搜索' in col_clean and '词' in col_clean:
                 mapping['search_term'] = col
                 break
-            if 'search' in col.lower() and 'term' in col.lower():
+            if 'search' in col_clean.lower() and 'term' in col_clean.lower():
                 mapping['search_term'] = col
                 break
     
     if 'search_frequency_rank' not in mapping:
         for col in cols:
-            if '搜索' in col and '排名' in col:
+            col_clean = col.strip()
+            if '搜索' in col_clean and '排名' in col_clean:
                 mapping['search_frequency_rank'] = col
                 break
-            if 'search' in col.lower() and 'rank' in col.lower():
+            if 'search' in col_clean.lower() and 'rank' in col_clean.lower():
                 mapping['search_frequency_rank'] = col
                 break
     
     if 'click_share' not in mapping:
         for col in cols:
-            if '点击' in col and '份额' in col:
+            col_clean = col.strip()
+            if '点击' in col_clean and '份额' in col_clean:
                 mapping['click_share'] = col
                 break
-            if 'click' in col.lower() and 'share' in col.lower():
+            if 'click' in col_clean.lower() and 'share' in col_clean.lower():
                 mapping['click_share'] = col
                 break
     
     if 'conversion_share' not in mapping:
         for col in cols:
-            if '转化' in col and '份额' in col:
+            col_clean = col.strip()
+            if '转化' in col_clean and '份额' in col_clean:
                 mapping['conversion_share'] = col
                 break
-            if 'conversion' in col.lower() and 'share' in col.lower():
+            if 'conversion' in col_clean.lower() and 'share' in col_clean.lower():
                 mapping['conversion_share'] = col
                 break
     
@@ -158,90 +165,82 @@ def get_modifier_category(modifier: str) -> str:
 
 
 # ============================================================
-# 中文多列格式转换（核心修复）
+# 中文多列格式转换（修复版）
 # ============================================================
 def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
     """
     解析中文多列 ASIN 格式的 ABA 文件，转换为标准格式
+    使用宽松匹配 + 兜底逻辑
     """
     import pandas as pd
     
-    # 清理列名
+    # 清理列名（去除首尾空格）
     df.columns = df.columns.str.strip()
     
     print("🔍 实际列名:", df.columns.tolist())
     
-    def find_column(must_contain: List[str]) -> Optional[str]:
+    def find_column(patterns: List[str], fallback_pattern: str = None) -> Optional[str]:
+        """
+        查找列名：必须包含 patterns 中所有关键词
+        如果找不到，尝试 fallback_pattern（只要包含即可）
+        """
+        # 先尝试精确匹配（必须包含所有关键词）
         for col in df.columns:
             col_clean = col.strip()
-            if all(kw in col_clean for kw in must_contain):
+            if all(p in col_clean for p in patterns):
                 return col
+        
+        # 兜底匹配：只匹配第一个关键词
+        if fallback_pattern:
+            for col in df.columns:
+                col_clean = col.strip()
+                if fallback_pattern in col_clean:
+                    return col
+        
         return None
     
-    # 搜索词和排名
-    search_term_col = find_column(['搜索词'])
-    search_rank_col = find_column(['搜索频率排名']) or find_column(['频率排名']) or find_column(['搜索排名'])
+    # ===== 搜索词和排名 =====
+    search_term_col = find_column(['搜索词'], '搜索词')
+    search_rank_col = find_column(['搜索频率排名'], '排名') or find_column(['频率排名'], '排名')
     
-    # 第1名
-    asin_1_col = find_column(['点击量第1的商品', 'ASIN'])
-    brand_1_col = find_column(['点击量第1的品牌'])
-    category_1_col = find_column(['点击量最高的分类'])
-    title_1_col = find_column(['点击量第1的商品', '商品标题'])
-    click_1_col = find_column(['点击量最高的商品', '点击份额'])
-    conv_1_col = find_column(['点击量第1的商品', '转化贡献占比'])
+    # ===== 第1名 =====
+    asin_1_col = find_column(['点击量第1的商品', 'ASIN'], 'ASIN')
+    brand_1_col = find_column(['点击量第1的品牌'], '品牌')
+    category_1_col = find_column(['点击量最高的分类'], '分类')
+    title_1_col = find_column(['点击量第1的商品', '商品标题'], '标题')
+    click_1_col = find_column(['点击量最高的商品', '点击份额'], '点击份额')
+    conv_1_col = find_column(['点击量第1的商品', '转化贡献占比'], '转化贡献')
     
-    # 第2名
-    asin_2_col = find_column(['点击量第2的商品', 'ASIN'])
-    brand_2_col = find_column(['点击量第2的品牌'])
-    category_2_col = find_column(['点击量第二的分类'])
-    title_2_col = find_column(['点击量第2的商品', '商品标题'])
-    click_2_col = find_column(['点击量第二的商品', '点击份额'])
-    conv_2_col = find_column(['热门点击商品第2名', '转化贡献占比'])
+    # ===== 第2名 =====
+    asin_2_col = find_column(['点击量第2的商品', 'ASIN'], 'ASIN')
+    brand_2_col = find_column(['点击量第2的品牌'], '品牌')
+    category_2_col = find_column(['点击量第二的分类'], '分类')
+    title_2_col = find_column(['点击量第2的商品', '商品标题'], '标题')
+    click_2_col = find_column(['点击量第二的商品', '点击份额'], '点击份额')
+    conv_2_col = find_column(['热门点击商品第2名', '转化贡献占比'], '转化贡献')
     
-    # 第3名
-    asin_3_col = find_column(['点击量第三的商品', 'ASIN'])
-    brand_3_col = find_column(['点击量第3的品牌'])
-    category_3_col = find_column(['点击量第 3 的分类'])
-    title_3_col = find_column(['点击量第3的商品', '商品标题'])
-    click_3_col = find_column(['点击量第三的商品', '点击份额'])
-    conv_3_col = find_column(['点击量第3的商品', '转化贡献占比'])
+    # ===== 第3名 =====
+    asin_3_col = find_column(['点击量第三的商品', 'ASIN'], 'ASIN')
+    brand_3_col = find_column(['点击量第3的品牌'], '品牌')
+    category_3_col = find_column(['点击量第 3 的分类'], '分类')
+    title_3_col = find_column(['点击量第3的商品', '商品标题'], '标题')
+    click_3_col = find_column(['点击量第三的商品', '点击份额'], '点击份额')
+    conv_3_col = find_column(['点击量第3的商品', '转化贡献占比'], '转化贡献')
     
-    # 检查必要列
+    # ===== 检查必要列 =====
     if not search_term_col:
         raise ValueError("未找到 '搜索词' 列，请确认文件格式")
     if not search_rank_col:
         raise ValueError("未找到 '搜索频率排名' 列，请确认文件格式")
     
-    print(f"✅ 找到搜索词列: {search_term_col}")
-    print(f"✅ 找到排名列: {search_rank_col}")
+    print(f"✅ 搜索词列: {search_term_col}")
+    print(f"✅ 排名列: {search_rank_col}")
+    print(f"✅ 第1名ASIN列: {asin_1_col}")
+    print(f"✅ 第2名ASIN列: {asin_2_col}")
+    print(f"✅ 第3名ASIN列: {asin_3_col}")
     
     # 确保排名列为数值类型
     df[search_rank_col] = pd.to_numeric(df[search_rank_col], errors='coerce')
-    
-    col_map = {
-        'searchTerm': search_term_col,
-        'searchFrequencyRank': search_rank_col,
-        'asin_1': asin_1_col,
-        'brand_1': brand_1_col,
-        'category_1': category_1_col,
-        'title_1': title_1_col,
-        'clickShare_1': click_1_col,
-        'conversionShare_1': conv_1_col,
-        'asin_2': asin_2_col,
-        'brand_2': brand_2_col,
-        'category_2': category_2_col,
-        'title_2': title_2_col,
-        'clickShare_2': click_2_col,
-        'conversionShare_2': conv_2_col,
-        'asin_3': asin_3_col,
-        'brand_3': brand_3_col,
-        'category_3': category_3_col,
-        'title_3': title_3_col,
-        'clickShare_3': click_3_col,
-        'conversionShare_3': conv_3_col,
-    }
-    
-    print("🔍 列名映射:", {k: v for k, v in col_map.items() if v is not None})
     
     rows = []
     for _, row in df.iterrows():
@@ -327,7 +326,7 @@ def parse_aba_csv(df: pd.DataFrame) -> Dict[str, Any]:
         df = parse_chinese_multi_asin_file(df)
         print(f"✅ 转换完成，共 {len(df)} 行")
     
-    # 检测列映射
+    # 检测列映射（如果是英文格式）
     col_mapping = detect_columns(df)
     
     # 重命名列
