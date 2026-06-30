@@ -1,5 +1,5 @@
 """
-Excel报告生成模块
+Excel报告生成模块（支持AI摘要）
 """
 
 import pandas as pd
@@ -14,37 +14,75 @@ def generate_excel_report(
     comment_insights: List[Dict[str, Any]],
     project_name: str,
     category: str,
-    date_range: list
+    date_range: list,
+    use_ai: bool = False,
+    api_key: str = None,
+    model: str = None,
+    base_url: str = None
 ) -> bytes:
-    """生成Excel报告"""
+    """生成Excel报告（支持AI摘要）"""
+    
+    # ===== AI 摘要生成 =====
+    if use_ai and api_key and scored_markets:
+        try:
+            from utils.ai_client import AIClient
+            from utils.prompts import build_summary_messages
+            
+            client = AIClient(api_key=api_key, model=model, base_url=base_url)
+            for market in scored_markets:
+                try:
+                    messages = build_summary_messages(market)
+                    market['ai_summary'] = client.chat_text(messages)
+                except Exception as e:
+                    market['ai_summary'] = f"AI摘要生成失败: {e}"
+        except Exception as e:
+            print(f"⚠️ AI 摘要生成失败: {e}")
+            for market in scored_markets:
+                market['ai_summary'] = "AI摘要生成失败，请检查API配置"
     
     output = io.BytesIO()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
+        # Sheet 1: 细分市场总览
         df_overview = pd.DataFrame(scored_markets)
+        if 'ai_summary' in df_overview.columns:
+            cols = ['name', 'grade', 'final_score', 'keyword_count', 'weight_level',
+                    'market_size_score', 'conversion_score', 'competition_score',
+                    'growth_score', 'profit_score', 'brand_monopoly_score',
+                    'new_product_score', 'modifier_acceptance_score',
+                    'price_elasticity_score', 'seasonality_score',
+                    'ai_summary', 'keywords']
+            available_cols = [c for c in cols if c in df_overview.columns]
+            df_overview = df_overview[available_cols]
         df_overview.to_excel(writer, sheet_name='细分市场总览', index=False)
         
+        # Sheet 2: 关键词明细
         if 'aba' in data:
             aba_df = data['aba']
-            cols_to_keep = [c for c in ['search_term', 'search_frequency_rank', 'click_share', 'conversion_share'] if c in aba_df.columns]
+            cols_to_keep = [c for c in ['search_term', 'search_frequency_rank', 'click_share', 'conversion_share'] 
+                           if c in aba_df.columns]
             if cols_to_keep:
                 df_keyword = aba_df[cols_to_keep].copy()
-                df_keyword.columns = ['关键词', '搜索排名', '点击份额', '转化份额'][:len(cols_to_keep)]
+                col_names = ['关键词', '搜索排名', '点击份额', '转化份额'][:len(cols_to_keep)]
+                df_keyword.columns = col_names
                 df_keyword.to_excel(writer, sheet_name='关键词明细', index=False)
         
+        # Sheet 3: ASIN排行
         if 'asin' in data:
             df_asin = data['asin'].copy()
             df_asin.to_excel(writer, sheet_name='ASIN排行', index=False)
         
+        # Sheet 4: 评论洞察
         if comment_insights:
             df_comment = pd.DataFrame(comment_insights)
-            if 'suggestions' in df_comment.columns:
-                df_comment['产品建议'] = df_comment['suggestions'].apply(lambda x: '; '.join(x.get('product', [])))
-                df_comment['Listing建议'] = df_comment['suggestions'].apply(lambda x: '; '.join(x.get('listing', [])))
-                df_comment = df_comment.drop(columns=['suggestions'])
+            cols = ['asin', 'review_count', 'depth', 'avg_rating', 'positive_ratio',
+                    'top_pains', 'top_praises', 'product_suggestions', 'listing_suggestions']
+            available_cols = [c for c in cols if c in df_comment.columns]
+            df_comment = df_comment[available_cols]
             df_comment.to_excel(writer, sheet_name='评论洞察与优化', index=False)
         
+        # Sheet 5: 入场时机
         df_timing = pd.DataFrame([{
             '细分市场': m.get('name', ''),
             '等级': m.get('grade', ''),
@@ -54,6 +92,7 @@ def generate_excel_report(
         } for m in scored_markets])
         df_timing.to_excel(writer, sheet_name='入场时机规划', index=False)
         
+        # Sheet 6: 卖点趋势
         df_trend = pd.DataFrame([{
             '卖点': m.get('name', ''),
             '等级': m.get('grade', ''),
