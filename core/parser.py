@@ -1,5 +1,5 @@
 """
-ABA CSV 解析器
+ABA CSV 解析器（支持中文多列格式）
 """
 
 import pandas as pd
@@ -18,24 +18,24 @@ from utils.constants import (
 
 
 def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
-    """自动检测列名映射"""
+    """自动检测列名映射（支持中英文）"""
     cols = df.columns.tolist()
     mapping = {}
     
     possible_mappings = {
         'search_term': ['Search Term', 'Search Term (Customer Search Term)', 
-                       'Customer Search Term', 'Keyword', 'search_term', '关键词'],
+                       'Customer Search Term', 'Keyword', 'search_term', '关键词', '搜索词', '搜索关键词'],
         'search_frequency_rank': ['Search Frequency Rank', 'Search Rank',
-                                 'Frequency Rank', 'search_frequency_rank', 'Rank', '排名'],
+                                 'Frequency Rank', 'search_frequency_rank', 'Rank', '排名', '搜索频率排名', '频率排名'],
         'top_clicked_brand': ['Top Clicked Brand', 'Top Brand',
-                             'top_clicked_brand', 'Brand', '品牌'],
+                             'top_clicked_brand', 'Brand', '品牌', '热门点击品牌'],
         'top_clicked_category': ['Top Clicked Category', 'Category',
-                                'top_clicked_category', '类目'],
+                                'top_clicked_category', '类目', '热门点击类目'],
         'top_clicked_product_asin': ['Top Clicked Product ASIN', 'Top ASIN',
-                                    'top_clicked_product_asin', 'ASIN'],
-        'product_title': ['Product Title', 'Title', 'product_title', '标题'],
-        'click_share': ['Click Share', 'Click %', 'click_share', '点击份额'],
-        'conversion_share': ['Conversion Share', 'Conversion %', 'conversion_share', '转化份额'],
+                                    'top_clicked_product_asin', 'ASIN', '热门点击ASIN'],
+        'product_title': ['Product Title', 'Title', 'product_title', '标题', '产品标题', '商品标题'],
+        'click_share': ['Click Share', 'Click %', 'click_share', '点击份额', '点击量占比', '点击量份额'],
+        'conversion_share': ['Conversion Share', 'Conversion %', 'conversion_share', '转化份额', '转化量占比', '转化贡献占比'],
     }
     
     for std_name, possible in possible_mappings.items():
@@ -50,19 +50,28 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     # 模糊匹配
     if 'search_term' not in mapping:
         for col in cols:
+            if '搜索' in col and '词' in col:
+                mapping['search_term'] = col
+                break
             if 'search' in col.lower() and 'term' in col.lower():
                 mapping['search_term'] = col
                 break
     
     if 'click_share' not in mapping:
         for col in cols:
-            if 'click' in col.lower() and ('share' in col.lower() or '%' in col):
+            if '点击' in col and '份额' in col:
+                mapping['click_share'] = col
+                break
+            if 'click' in col.lower() and 'share' in col.lower():
                 mapping['click_share'] = col
                 break
     
     if 'conversion_share' not in mapping:
         for col in cols:
-            if 'conversion' in col.lower() and ('share' in col.lower() or '%' in col):
+            if '转化' in col and '份额' in col:
+                mapping['conversion_share'] = col
+                break
+            if 'conversion' in col.lower() and 'share' in col.lower():
                 mapping['conversion_share'] = col
                 break
     
@@ -110,22 +119,161 @@ def extract_modifiers(term: str, category_base_words: set = None) -> List[str]:
     return modifiers
 
 
-def get_modifier_category(modifier: str) -> str:
-    """获取修饰词所属类别"""
-    modifier_lower = modifier.lower()
-    for category, keywords in MODIFIER_CATEGORIES.items():
-        for kw in keywords:
-            if kw in modifier_lower:
-                return category
-    return "其他"
+def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
+    """解析中文多列ASIN格式的ABA文件"""
+    import pandas as pd
+    
+    # 清理列名
+    df.columns = df.columns.str.strip()
+    
+    print("🔍 实际列名:", df.columns.tolist())
+    
+    def find_column(patterns: list) -> str:
+        for col in df.columns:
+            col_clean = col.strip()
+            for pattern in patterns:
+                if pattern in col_clean:
+                    return col
+        return None
+    
+    search_term_col = find_column(['搜索词'])
+    search_rank_col = find_column(['搜索频率排名', '频率排名'])
+    
+    # 第1名
+    asin_1_col = find_column(['点击量第1的商品', '第1名ASIN', 'ASIN1'])
+    brand_1_col = find_column(['点击量第1的品牌', '第1名品牌'])
+    category_1_col = find_column(['点击量最高的分类', '第1名类目'])
+    title_1_col = find_column(['点击量第1的商品', '商品标题', '第1名标题'])
+    click_1_col = find_column(['点击量最高的商品', '点击份额', '第1名点击份额'])
+    conv_1_col = find_column(['点击量第1的商品', '转化贡献占比', '第1名转化份额'])
+    
+    # 第2名
+    asin_2_col = find_column(['点击量第2的商品', '第2名ASIN', 'ASIN2'])
+    brand_2_col = find_column(['点击量第2的品牌', '第2名品牌'])
+    category_2_col = find_column(['点击量第二的分类', '第2名类目'])
+    title_2_col = find_column(['点击量第2的商品', '第2名标题'])
+    click_2_col = find_column(['点击量第二的商品', '点击份额', '第2名点击份额'])
+    conv_2_col = find_column(['热门点击商品第2名', '第2名转化份额'])
+    
+    # 第3名
+    asin_3_col = find_column(['点击量第三的商品', '第3名ASIN', 'ASIN3'])
+    brand_3_col = find_column(['点击量第3的品牌', '第3名品牌'])
+    category_3_col = find_column(['点击量第 3 的分类', '第3名类目'])
+    title_3_col = find_column(['点击量第3的商品', '第3名标题'])
+    click_3_col = find_column(['点击量第三的商品', '点击份额', '第3名点击份额'])
+    conv_3_col = find_column(['点击量第3的商品', '转化贡献占比', '第3名转化份额'])
+    
+    if not search_term_col:
+        raise ValueError("未找到 '搜索词' 列，请确认文件格式")
+    if not search_rank_col:
+        raise ValueError("未找到 '搜索频率排名' 列，请确认文件格式")
+    
+    col_map = {
+        'searchTerm': search_term_col,
+        'searchFrequencyRank': search_rank_col,
+        'asin_1': asin_1_col,
+        'brand_1': brand_1_col,
+        'category_1': category_1_col,
+        'title_1': title_1_col,
+        'clickShare_1': click_1_col,
+        'conversionShare_1': conv_1_col,
+        'asin_2': asin_2_col,
+        'brand_2': brand_2_col,
+        'category_2': category_2_col,
+        'title_2': title_2_col,
+        'clickShare_2': click_2_col,
+        'conversionShare_2': conv_2_col,
+        'asin_3': asin_3_col,
+        'brand_3': brand_3_col,
+        'category_3': category_3_col,
+        'title_3': title_3_col,
+        'clickShare_3': click_3_col,
+        'conversionShare_3': conv_3_col,
+    }
+    
+    print("🔍 列名映射:", {k: v for k, v in col_map.items() if v is not None})
+    
+    rows = []
+    for _, row in df.iterrows():
+        search_term = row.get(search_term_col, '') if search_term_col else ''
+        search_rank = row.get(search_rank_col, None) if search_rank_col else None
+        
+        # 第1名
+        if asin_1_col and pd.notna(row.get(asin_1_col)) and str(row.get(asin_1_col)).strip():
+            rows.append({
+                "searchTerm": str(search_term),
+                "searchFrequencyRank": search_rank,
+                "clickedAsin": str(row.get(asin_1_col, '')).strip(),
+                "clickedBrand": str(row.get(brand_1_col, '')).strip() if brand_1_col else '',
+                "clickedCategory": str(row.get(category_1_col, '')).strip() if category_1_col else '',
+                "productTitle": str(row.get(title_1_col, '')).strip() if title_1_col else '',
+                "clickShare": float(row.get(click_1_col, 0)) if click_1_col and pd.notna(row.get(click_1_col)) else 0,
+                "conversionShare": float(row.get(conv_1_col, 0)) if conv_1_col and pd.notna(row.get(conv_1_col)) else 0,
+                "rankPosition": 1
+            })
+        
+        # 第2名
+        if asin_2_col and pd.notna(row.get(asin_2_col)) and str(row.get(asin_2_col)).strip():
+            rows.append({
+                "searchTerm": str(search_term),
+                "searchFrequencyRank": search_rank,
+                "clickedAsin": str(row.get(asin_2_col, '')).strip(),
+                "clickedBrand": str(row.get(brand_2_col, '')).strip() if brand_2_col else '',
+                "clickedCategory": str(row.get(category_2_col, '')).strip() if category_2_col else '',
+                "productTitle": str(row.get(title_2_col, '')).strip() if title_2_col else '',
+                "clickShare": float(row.get(click_2_col, 0)) if click_2_col and pd.notna(row.get(click_2_col)) else 0,
+                "conversionShare": float(row.get(conv_2_col, 0)) if conv_2_col and pd.notna(row.get(conv_2_col)) else 0,
+                "rankPosition": 2
+            })
+        
+        # 第3名
+        if asin_3_col and pd.notna(row.get(asin_3_col)) and str(row.get(asin_3_col)).strip():
+            rows.append({
+                "searchTerm": str(search_term),
+                "searchFrequencyRank": search_rank,
+                "clickedAsin": str(row.get(asin_3_col, '')).strip(),
+                "clickedBrand": str(row.get(brand_3_col, '')).strip() if brand_3_col else '',
+                "clickedCategory": str(row.get(category_3_col, '')).strip() if category_3_col else '',
+                "productTitle": str(row.get(title_3_col, '')).strip() if title_3_col else '',
+                "clickShare": float(row.get(click_3_col, 0)) if click_3_col and pd.notna(row.get(click_3_col)) else 0,
+                "conversionShare": float(row.get(conv_3_col, 0)) if conv_3_col and pd.notna(row.get(conv_3_col)) else 0,
+                "rankPosition": 3
+            })
+    
+    if not rows:
+        raise ValueError("未能从文件中提取任何有效ASIN数据")
+    
+    return pd.DataFrame(rows)
 
 
 def parse_aba_csv(df: pd.DataFrame) -> Dict[str, Any]:
-    """解析ABA数据"""
+    """解析ABA数据，支持标准格式和中文多列格式"""
+    
     if df is None:
         return {"error": "未提供ABA数据"}
     
-    # 检测列映射
+    # 清理列名
+    df.columns = df.columns.str.strip() if hasattr(df.columns, 'str') else df.columns
+    
+    # 检测是否为中文多列格式
+    has_chinese_format = False
+    for col in df.columns:
+        col_clean = col.strip() if isinstance(col, str) else str(col)
+        if '搜索词' in col_clean:
+            for col2 in df.columns:
+                col2_clean = col2.strip() if isinstance(col2, str) else str(col2)
+                if '点击量第1的商品' in col2_clean or '点击量第1' in col2_clean:
+                    has_chinese_format = True
+                    break
+        if has_chinese_format:
+            break
+    
+    if has_chinese_format:
+        print("🔍 检测到中文多列格式，正在转换为标准ABA格式...")
+        df = parse_chinese_multi_asin_file(df)
+        print(f"✅ 转换完成，共 {len(df)} 行")
+    
+    # 检测列映射（如果是英文格式）
     col_mapping = detect_columns(df)
     
     # 重命名列
@@ -134,7 +282,7 @@ def parse_aba_csv(df: pd.DataFrame) -> Dict[str, Any]:
     
     # 确保必要列存在
     if 'search_term' not in df_clean.columns:
-        return {"error": "无法找到Search Term列"}
+        return {"error": "无法找到Search Term列，请确认文件格式"}
     
     # 清理数据
     df_clean = df_clean.dropna(subset=['search_term'])
@@ -187,7 +335,13 @@ def parse_aba_csv(df: pd.DataFrame) -> Dict[str, Any]:
     
     # Top ASIN
     top_asins = Counter()
-    if 'top_clicked_product_asin' in df_clean.columns:
+    if 'clickedAsin' in df_clean.columns:
+        asin_data = df_clean[df_clean['clickedAsin'].notna()]
+        for _, row in asin_data.iterrows():
+            asin = str(row['clickedAsin']).strip()
+            if asin and asin != 'nan':
+                top_asins[asin] += 1
+    elif 'top_clicked_product_asin' in df_clean.columns:
         asin_data = df_clean[df_clean['top_clicked_product_asin'].notna()]
         for _, row in asin_data.iterrows():
             asin = str(row['top_clicked_product_asin']).strip()
