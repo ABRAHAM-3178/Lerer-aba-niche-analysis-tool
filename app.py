@@ -10,16 +10,13 @@ import io
 from datetime import datetime
 import re
 
-# 如果有其他自定义模块，导入放在这里
 from core.parser import parse_aba_csv
 
 # ============================================================
-# 辅助函数（必须在业务逻辑之前定义）
+# 辅助函数
 # ============================================================
 
-# ---------- 内置中文->英文列名映射 ----------
 CHINESE_COLUMN_MAP = {
-    # 关键词数据表
     "关键词": "keyword",
     "搜索词": "keyword",
     "月搜索量": "monthly_search_volume",
@@ -34,7 +31,6 @@ CHINESE_COLUMN_MAP = {
     "增长率": "search_growth_rate",
     "平均售价": "avg_price",
     "售价": "avg_price",
-    # ASIN 数据表
     "ASIN": "asin",
     "商品编码": "asin",
     "价格": "price",
@@ -42,16 +38,13 @@ CHINESE_COLUMN_MAP = {
     "评论数": "review_count",
     "BSR": "bsr",
     "上架日期": "listing_date",
-    # 评论数据表
     "评论日期": "review_date",
     "评论标题": "review_title",
     "评论内容": "review_body",
-    # Sif 流量词表
     "自然流量占比": "organic_share",
     "SP广告占比": "sp_share",
     "SB广告占比": "sb_share",
     "ABA TOP3集中度": "aba_concentration",
-    # 趋势验证表
     "初始价格": "initial_price",
     "当前价格": "current_price",
     "初始月销量": "initial_monthly_sales",
@@ -59,36 +52,29 @@ CHINESE_COLUMN_MAP = {
     "卖点": "modifier",
 }
 
-# ---------- 字段要求配置 ----------
 FIELD_REQUIREMENTS = {
     "keyword": {
         "required": ["keyword", "monthly_search_volume", "purchase_rate", "ppc_bid", "supply_demand_ratio", "click_concentration", "search_growth_rate", "avg_price"],
-        "optional": [],
         "label": "关键词数据表"
     },
     "asin": {
         "required": ["asin", "keyword", "price", "rating", "review_count", "bsr", "listing_date"],
-        "optional": [],
         "label": "ASIN数据表"
     },
     "review": {
         "required": ["asin", "review_date", "rating", "review_body"],
-        "optional": ["review_title"],
         "label": "评论数据表"
     },
     "sif": {
         "required": ["keyword"],
-        "optional": ["organic_share", "sp_share", "sb_share", "aba_concentration"],
         "label": "Sif流量词表"
     },
     "trend": {
         "required": ["asin", "modifier", "initial_price", "current_price", "initial_monthly_sales", "current_monthly_sales"],
-        "optional": ["listing_date"],
         "label": "趋势验证表"
     }
 }
 
-# ---------- 文件读取函数 ----------
 def safe_read_file(file):
     """安全读取 CSV 或 Excel 文件"""
     ext = file.name.split('.')[-1].lower()
@@ -108,19 +94,11 @@ def safe_read_file(file):
     except Exception as e:
         raise ValueError(f"无法读取文件: {e}")
 
-# ---------- AI 列名映射函数 ----------
 def smart_column_mapping(df, file_type, use_ai, api_key, model, base_url):
-    """
-    智能列名映射：优先 AI，失败则回退到内置字典
-    file_type: 'keyword' | 'asin' | 'review' | 'sif' | 'trend'
-    """
-    # 检测列名是否包含中文
     has_chinese = any(any('\u4e00' <= c <= '\u9fff' for c in col) for col in df.columns)
-    
     if not has_chinese:
         return df
-    
-    # 1. 尝试 AI 映射
+
     if use_ai and api_key:
         try:
             import openai
@@ -128,7 +106,7 @@ def smart_column_mapping(df, file_type, use_ai, api_key, model, base_url):
             columns = df.columns.tolist()
             sample = df.head(3).to_dict('records')
             prompt = f"""
-            你是一个数据分析专家。分析以下列名和样本数据，识别出列的含义（搜索词、排名、品牌、ASIN、点击份额、转化份额等）。
+            你是一个数据分析专家。分析以下列名和样本数据，识别出列的含义。
             列名：{columns}
             样本数据（JSON格式）：{json.dumps(sample, ensure_ascii=False, default=str)}
             输出JSON格式：
@@ -153,8 +131,7 @@ def smart_column_mapping(df, file_type, use_ai, api_key, model, base_url):
                 return df
         except Exception as e:
             st.warning(f"⚠️ AI 映射失败，使用内置字典: {e}")
-    
-    # 2. 回退到内置字典
+
     col_mapping = {}
     for col in df.columns:
         if col in CHINESE_COLUMN_MAP:
@@ -166,54 +143,30 @@ def smart_column_mapping(df, file_type, use_ai, api_key, model, base_url):
                     break
     if col_mapping:
         df = df.rename(columns=col_mapping)
-    
     return df
 
-# ---------- 上传文件处理函数 ----------
 def process_uploaded_file(uploaded_file, file_type, use_ai, api_key, model, base_url):
-    """
-    处理上传文件：读取 → 列映射 → 校验 → 返回 DataFrame
-    """
     if uploaded_file is None:
         return None, "文件为空"
-    
     try:
-        # 1. 读取文件
         df = safe_read_file(uploaded_file)
-        
         if df.empty:
             return None, "文件为空"
-        
-        # 2. 智能列映射
         df = smart_column_mapping(df, file_type, use_ai, api_key, model, base_url)
-        
-        # 3. 校验必需字段
         required = FIELD_REQUIREMENTS.get(file_type, {}).get("required", [])
         missing = [f for f in required if f not in df.columns]
         if missing:
             return None, f"缺少必需字段: {missing}"
-        
-        # 4. 数据清洗（简单处理）
         for col in df.columns:
             if df[col].dtype == 'object':
                 df[col] = df[col].astype(str).str.strip()
-        
-        # 5. 数据摘要
-        summary = {
-            "rows": len(df),
-            "columns": len(df.columns),
-            "fields": df.columns.tolist(),
-            "head": df.head(5)
-        }
-        
-        return df, summary
-    
+        return df, {"rows": len(df), "columns": len(df.columns), "fields": df.columns.tolist()}
     except Exception as e:
         return None, f"处理失败: {e}"
 
 
 # ============================================================
-# 页面配置 & CSS
+# 页面配置
 # ============================================================
 st.set_page_config(
     page_title="ABA利基分析工具 v3.0",
@@ -244,36 +197,15 @@ st.markdown("""
 # ============================================================
 # Session State 初始化
 # ============================================================
-if "step" not in st.session_state:
-    st.session_state.step = 1
-if "project_name" not in st.session_state:
-    st.session_state.project_name = ""
-if "category" not in st.session_state:
-    st.session_state.category = ""
-if "date_range" not in st.session_state:
-    st.session_state.date_range = []
-if "merged_keywords" not in st.session_state:
-    st.session_state.merged_keywords = None
-if "merged_asins" not in st.session_state:
-    st.session_state.merged_asins = None
-if "aba_preview" not in st.session_state:
-    st.session_state.aba_preview = None
-if "uploaded_files" not in st.session_state:
-    st.session_state.uploaded_files = {}
+for key in ["step", "project_name", "category", "date_range", "merged_keywords", "merged_asins", "aba_preview", "analysis_result", "analysis_complete", "ai_enabled", "api_key", "model", "base_url"]:
+    if key not in st.session_state:
+        st.session_state[key] = None if "key" in ["merged_keywords", "merged_asins", "aba_preview", "analysis_result"] else "" if "key" in ["project_name", "category", "api_key", "model", "base_url"] else 1 if key == "step" else [] if key == "date_range" else False
+
+# 确保映射数据字典存在
 if "mapped_dfs" not in st.session_state:
     st.session_state.mapped_dfs = {}
-if "analysis_result" not in st.session_state:
-    st.session_state.analysis_result = None
-if "analysis_complete" not in st.session_state:
-    st.session_state.analysis_complete = False
-if "ai_enabled" not in st.session_state:
-    st.session_state.ai_enabled = False
-if "api_key" not in st.session_state:
-    st.session_state.api_key = ""
-if "model" not in st.session_state:
-    st.session_state.model = "deepseek-chat"
-if "base_url" not in st.session_state:
-    st.session_state.base_url = "https://api.deepseek.com/v1"
+if "uploaded_file_names" not in st.session_state:
+    st.session_state.uploaded_file_names = {}   # 只存文件名
 
 
 # ============================================================
@@ -319,7 +251,6 @@ def merge_aba_files(uploaded_files, use_ai=False, api_key=None, model=None, base
             else:
                 df = pd.read_excel(io.BytesIO(file_bytes), skiprows=skip_rows, engine='openpyxl')
             
-            # 如果启用了 AI，对 ABA 文件也进行智能列映射
             if use_ai and api_key:
                 df = smart_column_mapping(df, 'keyword', use_ai, api_key, model, base_url)
             
@@ -338,7 +269,6 @@ def merge_aba_files(uploaded_files, use_ai=False, api_key=None, model=None, base
     if not all_keywords:
         return None, None, {}
     
-    # 合并去重
     keyword_map = {}
     for kw in all_keywords:
         term = kw.get("search_term")
@@ -444,12 +374,10 @@ with st.sidebar:
     
     st.divider()
     
-    # ===== AI 配置（持久化） =====
     st.markdown("### 🤖 AI 智能分析")
     st.caption("启用AI可进行数据清洗、卖点发现和智能聚类")
     st.caption("💡 只需输入一次，后续所有步骤持续使用")
     
-    # 从 st.secrets 读取默认值
     default_secret_key = ""
     default_secret_url = "https://api.deepseek.com/v1"
     default_secret_model = "deepseek-chat"
@@ -460,18 +388,15 @@ with st.sidebar:
     except:
         pass
     
-    # API Key
     current_key = st.session_state.api_key or default_secret_key
     api_key = st.text_input(
         "DeepSeek API Key",
         type="password",
         value=current_key,
         placeholder="sk-...",
-        key="api_key_input",
-        help="输入后自动保存，无需重复输入"
+        key="api_key_input"
     )
     
-    # 模型
     current_model = st.session_state.model or default_secret_model
     model_choice = st.selectbox(
         "模型",
@@ -482,17 +407,14 @@ with st.sidebar:
     if model_choice != st.session_state.model:
         st.session_state.model = model_choice
     
-    # Base URL
     current_url = st.session_state.base_url or default_secret_url
     base_url = st.text_input(
         "API Base URL",
         value=current_url,
         placeholder="https://api.deepseek.com/v1",
-        key="base_url_input",
-        help="DeepSeek 使用 https://api.deepseek.com/v1"
+        key="base_url_input"
     )
     
-    # 同步 session_state
     if api_key and api_key != st.session_state.api_key:
         st.session_state.api_key = api_key
         st.session_state.ai_enabled = True
@@ -519,7 +441,7 @@ st.markdown('<p class="sub-header">AI 智能列映射 · 多文件合并 · 全�
 
 
 # ============================================================
-# STEP 1: 项目设置
+# STEP 1
 # ============================================================
 if st.session_state.step == 1:
     st.markdown("### ⚙️ Step 1: 项目设置")
@@ -550,7 +472,7 @@ if st.session_state.step == 1:
 
 
 # ============================================================
-# STEP 2: 上传 ABA 数据（多文件合并）
+# STEP 2
 # ============================================================
 elif st.session_state.step == 2:
     st.markdown("### 📂 Step 2: 上传ABA数据（可上传2~5个文件）")
@@ -569,7 +491,6 @@ elif st.session_state.step == 2:
         elif len(uploaded_files) > 5:
             st.warning("最多支持5个文件，已截取前5个")
             uploaded_files = uploaded_files[:5]
-        st.session_state.uploaded_files = uploaded_files
         st.success(f"✅ 已选择 {len(uploaded_files)} 个文件")
         for f in uploaded_files:
             st.write(f"- {f.name} ({f.size//1024} KB)")
@@ -606,12 +527,7 @@ elif st.session_state.step == 2:
             keyword_data = []
             for i, item in enumerate(merged_keywords[:20], 1):
                 rank = item.get("search_frequency_rank")
-                if rank and rank <= 10000:
-                    weight = "🔴 高权重"
-                elif rank and rank <= 50000:
-                    weight = "🟡 中权重"
-                else:
-                    weight = "🟢 低权重"
+                weight = "🔴 高权重" if rank and rank <= 10000 else ("🟡 中权重" if rank and rank <= 50000 else "🟢 低权重")
                 keyword_data.append({
                     "序号": i,
                     "关键词": item.get("search_term", ""),
@@ -631,9 +547,7 @@ elif st.session_state.step == 2:
             
             st.markdown("---")
             st.markdown("#### 📦 Top 10 ASIN（按出现频次排序）")
-            asin_data = []
-            for i, (asin, count) in enumerate(merged_asins[:10], 1):
-                asin_data.append({"序号": i, "ASIN": asin, "出现频次": count})
+            asin_data = [{"序号": i, "ASIN": asin, "出现频次": count} for i, (asin, count) in enumerate(merged_asins[:10], 1)]
             st.dataframe(pd.DataFrame(asin_data), use_container_width=True, hide_index=True)
             st.download_button(
                 label="📋 复制ASIN列表 (Top 10)",
@@ -644,15 +558,8 @@ elif st.session_state.step == 2:
             
             avg_click = stats.get("avg_click_share", 0)
             if isinstance(avg_click, (int, float)) and avg_click > 0:
-                if avg_click < 5:
-                    rating = "低垄断 ✅"
-                    color = "green"
-                elif avg_click < 10:
-                    rating = "中等 ⚠️"
-                    color = "orange"
-                else:
-                    rating = "高垄断 ❌"
-                    color = "red"
+                color = "green" if avg_click < 5 else ("orange" if avg_click < 10 else "red")
+                rating = "低垄断 ✅" if avg_click < 5 else ("中等 ⚠️" if avg_click < 10 else "高垄断 ❌")
                 st.markdown(
                     f"📊 平均点击份额 **{avg_click:.2f}%** → 评级：<span style='color:{color};font-weight:bold;'>{rating}</span>",
                     unsafe_allow_html=True
@@ -669,7 +576,7 @@ elif st.session_state.step == 2:
             st.rerun()
     with col2:
         if st.button("下一步 →", type="primary", use_container_width=True):
-            if not st.session_state.uploaded_files or st.session_state.merged_keywords is None:
+            if not merged_keywords:
                 st.error("请上传并成功合并ABA文件")
             else:
                 st.session_state.step = 3
@@ -677,13 +584,12 @@ elif st.session_state.step == 2:
 
 
 # ============================================================
-# STEP 3: 上传补充数据文件（AI 增强版）
+# STEP 3
 # ============================================================
 elif st.session_state.step == 3:
     st.markdown("### 📂 Step 3: 上传补充数据文件")
     st.markdown("上传从卖家精灵、Sif等工具导出的深度数据，AI 会自动识别列名并清洗数据")
     
-    # 显示当前选中的关键词和ASIN
     if st.session_state.merged_keywords:
         with st.expander("📋 当前需要调研的关键词 (Top 20)", expanded=False):
             keywords_display = [item.get("search_term", "") for item in st.session_state.merged_keywords[:20]]
@@ -705,31 +611,11 @@ elif st.session_state.step == 3:
     """)
     
     file_configs = {
-        "keyword": {
-            "label": "📊 关键词数据表 *",
-            "help": "卖家精灵导出的关键词深度数据",
-            "required_fields": ["keyword", "monthly_search_volume", "purchase_rate", "ppc_bid", "supply_demand_ratio", "click_concentration", "search_growth_rate", "avg_price"]
-        },
-        "asin": {
-            "label": "📦 ASIN数据表 *",
-            "help": "卖家精灵导出的ASIN详情数据",
-            "required_fields": ["asin", "keyword", "price", "rating", "review_count", "bsr", "listing_date"]
-        },
-        "review": {
-            "label": "💬 评论数据表",
-            "help": "评论数>200的ASIN需提供",
-            "required_fields": ["asin", "review_date", "rating", "review_body"]
-        },
-        "sif": {
-            "label": "🔗 Sif流量词表",
-            "help": "Sif反查流量词结果",
-            "required_fields": ["keyword"]
-        },
-        "trend": {
-            "label": "📈 趋势验证表",
-            "help": "销量/价格变化数据",
-            "required_fields": ["asin", "modifier", "initial_price", "current_price", "initial_monthly_sales", "current_monthly_sales"]
-        }
+        "keyword": {"label": "📊 关键词数据表 *", "help": "卖家精灵导出的关键词深度数据"},
+        "asin": {"label": "📦 ASIN数据表 *", "help": "卖家精灵导出的ASIN详情数据"},
+        "review": {"label": "💬 评论数据表", "help": "评论数>200的ASIN需提供"},
+        "sif": {"label": "🔗 Sif流量词表", "help": "Sif反查流量词结果"},
+        "trend": {"label": "📈 趋势验证表", "help": "销量/价格变化数据"}
     }
     
     cols = st.columns(2)
@@ -743,41 +629,39 @@ elif st.session_state.step == 3:
             )
             
             if uploaded is not None:
-                # 获取 AI 配置
                 use_ai = st.session_state.ai_enabled
                 api_key = st.session_state.api_key if use_ai else None
                 model = st.session_state.model if use_ai else None
                 base_url = st.session_state.base_url if use_ai else None
                 
-                # 处理文件（AI 列映射 + 清洗 + 校验）
                 with st.spinner(f"🧠 AI 正在处理 {config['label']}..."):
                     df, result = process_uploaded_file(
                         uploaded, key, use_ai, api_key, model, base_url
                     )
                 
                 if df is not None:
-                    # ✅ 只存储文件名，不存储文件对象（避免 TypeError）
-                    st.session_state.uploaded_files[key] = uploaded.name
+                    # 存储 DataFrame，并存储文件名
+                    st.session_state.mapped_dfs[key] = df
+                    st.session_state.uploaded_file_names[key] = uploaded.name   # 只存文件名，避免对象问题
                     st.success(f"✅ 已上传并映射成功: {uploaded.name} ({len(df)} 行)")
                     
-                    # 存储映射后的 DataFrame
-                    st.session_state.mapped_dfs[key] = df
-                    
-                    # 显示数据摘要
                     with st.expander("📊 数据预览与摘要", expanded=True):
                         st.markdown(f"**行数**: {len(df)} | **列数**: {len(df.columns)}")
                         st.markdown(f"**字段**: {', '.join(df.columns.tolist())}")
                         st.dataframe(df.head(5), use_container_width=True)
                 else:
                     st.error(f"❌ {config['label']} 处理失败: {result}")
-                    if key in st.session_state.uploaded_files:
-                        del st.session_state.uploaded_files[key]
+                    # 如果之前存储了该键，则移除
+                    if key in st.session_state.mapped_dfs:
+                        del st.session_state.mapped_dfs[key]
+                    if key in st.session_state.uploaded_file_names:
+                        del st.session_state.uploaded_file_names[key]
     
     # 检查必填项
     missing = []
-    if "keyword" not in st.session_state.uploaded_files:
+    if "keyword" not in st.session_state.mapped_dfs:
         missing.append("关键词数据表")
-    if "asin" not in st.session_state.uploaded_files:
+    if "asin" not in st.session_state.mapped_dfs:
         missing.append("ASIN数据表")
     
     if missing:
@@ -790,7 +674,7 @@ elif st.session_state.step == 3:
             st.rerun()
     with col2:
         if st.button("下一步 →", type="primary", use_container_width=True):
-            if "keyword" not in st.session_state.uploaded_files or "asin" not in st.session_state.uploaded_files:
+            if "keyword" not in st.session_state.mapped_dfs or "asin" not in st.session_state.mapped_dfs:
                 st.error("请上传关键词和ASIN数据表")
             else:
                 st.session_state.step = 4
@@ -798,48 +682,46 @@ elif st.session_state.step == 3:
 
 
 # ============================================================
-# STEP 4: 预览校验
+# STEP 4
 # ============================================================
 elif st.session_state.step == 4:
     st.markdown("### 🔍 Step 4: 数据预览与校验")
     
-    # 显示所有已上传文件的摘要
-    for key, file_name in st.session_state.uploaded_files.items():
+    # 显示已上传的文件
+    for key, file_name in st.session_state.uploaded_file_names.items():
         if key in st.session_state.mapped_dfs:
             df = st.session_state.mapped_dfs[key]
             st.markdown(f"✅ **{key}**: {file_name} ({len(df)} 行, {len(df.columns)} 列)")
             with st.expander(f"📊 {key} 数据预览"):
                 st.dataframe(df.head(5), use_container_width=True)
         else:
-            st.markdown(f"❌ **{key}**: 数据未找到")
+            st.markdown(f"❌ **{key}**: 数据未加载")
     
     st.divider()
     st.markdown("#### 📋 数据完整性检查")
     
     # 检查关键词数据表
-    if "keyword" in st.session_state.uploaded_files:
-        if "keyword" in st.session_state.mapped_dfs:
-            df = st.session_state.mapped_dfs["keyword"]
-            required = ["keyword", "monthly_search_volume", "purchase_rate", "ppc_bid", "supply_demand_ratio", "click_concentration", "search_growth_rate", "avg_price"]
-            missing = [f for f in required if f not in df.columns]
-            if missing:
-                st.warning(f"⚠️ 关键词数据表缺少字段: {missing}")
-            else:
-                st.success("✅ 关键词数据表：完整")
+    if "keyword" in st.session_state.mapped_dfs:
+        df = st.session_state.mapped_dfs["keyword"]
+        required = ["keyword", "monthly_search_volume", "purchase_rate", "ppc_bid", "supply_demand_ratio", "click_concentration", "search_growth_rate", "avg_price"]
+        missing = [f for f in required if f not in df.columns]
+        if missing:
+            st.warning(f"⚠️ 关键词数据表缺少字段: {missing}")
         else:
-            st.warning("⚠️ 关键词数据表未加载")
+            st.success("✅ 关键词数据表：完整")
+    else:
+        st.warning("⚠️ 关键词数据表未上传")
     
-    if "asin" in st.session_state.uploaded_files:
-        if "asin" in st.session_state.mapped_dfs:
-            df = st.session_state.mapped_dfs["asin"]
-            required = ["asin", "keyword", "price", "rating", "review_count", "bsr", "listing_date"]
-            missing = [f for f in required if f not in df.columns]
-            if missing:
-                st.warning(f"⚠️ ASIN数据表缺少字段: {missing}")
-            else:
-                st.success("✅ ASIN数据表：完整")
+    if "asin" in st.session_state.mapped_dfs:
+        df = st.session_state.mapped_dfs["asin"]
+        required = ["asin", "keyword", "price", "rating", "review_count", "bsr", "listing_date"]
+        missing = [f for f in required if f not in df.columns]
+        if missing:
+            st.warning(f"⚠️ ASIN数据表缺少字段: {missing}")
         else:
-            st.warning("⚠️ ASIN数据表未加载")
+            st.success("✅ ASIN数据表：完整")
+    else:
+        st.warning("⚠️ ASIN数据表未上传")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -850,7 +732,6 @@ elif st.session_state.step == 4:
         if st.button("🚀 开始分析", type="primary", use_container_width=True):
             with st.spinner("正在分析中..."):
                 try:
-                    # 读取所有映射后的 DataFrame
                     data = {}
                     for key in ["keyword", "asin", "review", "sif", "trend"]:
                         if key in st.session_state.mapped_dfs:
@@ -861,7 +742,6 @@ elif st.session_state.step == 4:
                     model = st.session_state.model if use_ai else None
                     base_url = st.session_state.base_url if use_ai else None
                     
-                    # 使用合并后的 ABA 数据
                     aba_result = {
                         "non_brand_keywords": st.session_state.merged_keywords,
                         "top_asins": st.session_state.merged_asins,
@@ -869,7 +749,6 @@ elif st.session_state.step == 4:
                         "avg_click_share": st.session_state.aba_preview.get("avg_click_share", 0)
                     }
                     
-                    # 调用聚类（如果模块存在）
                     try:
                         from core.clustering import semantic_clustering
                         clusters = semantic_clustering(aba_result, st.session_state.category, use_ai, api_key, model, base_url)
@@ -889,13 +768,24 @@ elif st.session_state.step == 4:
 
 
 # ============================================================
-# STEP 5: 分析完成
+# STEP 5
 # ============================================================
 elif st.session_state.step == 5:
     st.markdown("### 🎉 Step 5: 分析完成！")
     st.success("请下载报告或重新分析")
     if st.button("🔄 重新分析"):
-        st.session_state.step = 1
-        st.session_state.analysis_complete = False
-        st.session_state.analysis_result = None
+        for key in ["step", "project_name", "category", "date_range", "merged_keywords", "merged_asins", "aba_preview", "mapped_dfs", "uploaded_file_names", "analysis_result", "analysis_complete"]:
+            if key in st.session_state:
+                if key == "step":
+                    st.session_state[key] = 1
+                elif key in ["project_name", "category"]:
+                    st.session_state[key] = ""
+                elif key == "date_range":
+                    st.session_state[key] = []
+                elif key in ["merged_keywords", "merged_asins", "aba_preview", "analysis_result"]:
+                    st.session_state[key] = None
+                elif key in ["mapped_dfs", "uploaded_file_names"]:
+                    st.session_state[key] = {}
+                elif key == "analysis_complete":
+                    st.session_state[key] = False
         st.rerun()
