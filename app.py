@@ -14,7 +14,7 @@ from core.scoring import calculate_10d_scores, assign_weight_level
 from core.trend import trend_verification
 from core.comment_analysis import analyze_comments
 from core.report_generator import generate_excel_report
-from core.data_loader import load_keyword_history, load_product_history, merge_keywords_from_history, merge_asins_from_history
+from core.data_loader import load_keyword_history, load_product_history
 
 # ============ 页面配置 ============
 st.set_page_config(
@@ -59,9 +59,9 @@ st.markdown("""
 
 # ============ Session State 初始化 ============
 if "step" not in st.session_state:
-    st.session_state.step = 0  # 0=路径选择, 1=项目设置, 2=上传ABA, 3=补充数据, 4=预览, 5=分析
+    st.session_state.step = 0
 if "path" not in st.session_state:
-    st.session_state.path = None  # 'A' 或 'B'
+    st.session_state.path = None
 if "project_name" not in st.session_state:
     st.session_state.project_name = ""
 if "category" not in st.session_state:
@@ -76,6 +76,8 @@ if "merged_asins" not in st.session_state:
     st.session_state.merged_asins = None
 if "aba_preview" not in st.session_state:
     st.session_state.aba_preview = None
+if "aba_raw" not in st.session_state:
+    st.session_state.aba_raw = None
 if "mapped_dfs" not in st.session_state:
     st.session_state.mapped_dfs = {}
 if "uploaded_file_names" not in st.session_state:
@@ -84,6 +86,12 @@ if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
 if "analysis_complete" not in st.session_state:
     st.session_state.analysis_complete = False
+if "hist_keyword_df" not in st.session_state:
+    st.session_state.hist_keyword_df = None
+if "hist_asin_df" not in st.session_state:
+    st.session_state.hist_asin_df = None
+if "hist_trend_df" not in st.session_state:
+    st.session_state.hist_trend_df = None
 # AI 配置
 if "ai_enabled" not in st.session_state:
     st.session_state.ai_enabled = False
@@ -154,7 +162,7 @@ if st.session_state.step == 0:
     st.markdown("---")
     st.markdown("💡 **不确定选哪个？** 如果您有供应链资源，选 B；如果您想先看市场机会，选 A。")
 
-# ============ 侧边栏（所有Step共享） ============
+# ============ 侧边栏 ============
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/amazon.png", width=50)
     st.markdown("### 📊 分析进度")
@@ -169,7 +177,6 @@ with st.sidebar:
     
     st.divider()
     
-    # AI配置
     st.markdown("### 🤖 AI 智能分析")
     st.caption("启用AI可获得更精准的数据清洗、聚类和洞察")
     
@@ -230,7 +237,7 @@ if st.session_state.step >= 1:
         st.markdown('<p class="sub-header">路径 B：产品驱动 — 先有产品，再找市场</p>', unsafe_allow_html=True)
 
 # ============================================================
-# STEP 1: 项目设置（差异化）
+# STEP 1: 项目设置
 # ============================================================
 if st.session_state.step == 1:
     st.markdown("### ⚙️ Step 1: 项目设置")
@@ -244,7 +251,6 @@ if st.session_state.step == 1:
                 if project_name:
                     st.session_state.project_name = project_name
             with col2:
-                # 类目输入/选择
                 category_input = st.text_input("📂 目标类目 *", value=st.session_state.category, placeholder="例：电子产品 > 耳机")
                 if category_input:
                     st.session_state.category = category_input
@@ -253,7 +259,7 @@ if st.session_state.step == 1:
                 st.session_state.date_range = date_range
         st.info("💡 如果您不确定类目，可以先输入大类，AI 会帮您细化。")
     
-    else:  # 路径 B
+    else:
         st.markdown("您选择了 **产品驱动** 路径。请描述您的产品优势：")
         with st.container():
             col1, col2 = st.columns(2)
@@ -265,7 +271,6 @@ if st.session_state.step == 1:
                 product_keyword = st.text_input("🏷️ 核心产品词 *", value=st.session_state.product_keyword, placeholder="例：eco friendly yoga mat")
                 if product_keyword:
                     st.session_state.product_keyword = product_keyword
-                    # 自动填入类目（后续AI会细化）
                     st.session_state.category = "待AI识别"
             date_range = st.date_input("📅 数据时间范围", value=st.session_state.date_range if st.session_state.date_range else [])
             if date_range:
@@ -286,7 +291,7 @@ if st.session_state.step == 1:
                 st.rerun()
 
 # ============================================================
-# STEP 2: 上传ABA数据（差异化提示）
+# STEP 2: 上传ABA数据
 # ============================================================
 elif st.session_state.step == 2:
     st.markdown("### 📂 Step 2: 上传ABA原始数据")
@@ -320,7 +325,6 @@ elif st.session_state.step == 2:
 
     if uploaded is not None:
         try:
-            # 智能读取文件
             file_bytes = uploaded.getvalue()
             file_extension = uploaded.name.split('.')[-1].lower()
             skip_rows = 0
@@ -344,7 +348,6 @@ elif st.session_state.step == 2:
             
             st.success(f"✅ 文件读取成功: {uploaded.name} ({len(df)} 行)")
             
-            # 立即解析ABA
             from core.parser import parse_aba_csv
             from core.clustering import semantic_clustering
             
@@ -355,10 +358,8 @@ elif st.session_state.step == 2:
                 base_url = st.session_state.base_url if use_ai else None
                 
                 aba_result = parse_aba_csv(df)
-                # 存储ABA结果供后续使用
                 st.session_state.aba_raw = aba_result
                 
-                # 初步聚类（可能不全，后续可再调用）
                 clusters = semantic_clustering(
                     aba_result, 
                     st.session_state.category,
@@ -368,7 +369,6 @@ elif st.session_state.step == 2:
                     base_url=base_url
                 )
             
-            # 显示数据面板
             st.markdown("---")
             st.markdown("### 📊 Step 2 数据面板：调研候选清单")
             
@@ -385,7 +385,6 @@ elif st.session_state.step == 2:
                 avg_click = aba_result.get("avg_click_share", 0)
                 st.metric("📈 平均点击份额", f"{avg_click:.2f}%" if avg_click else "N/A")
             
-            # Top 20 关键词（按ABA排名）
             st.markdown("---")
             st.markdown("#### 🔍 需要调研的关键词（Top 20）")
             top_non_brand = aba_result.get("non_brand_keywords", [])[:20]
@@ -411,7 +410,6 @@ elif st.session_state.step == 2:
                     mime="text/plain"
                 )
             
-            # Top 10 ASIN
             st.markdown("---")
             st.markdown("#### 📦 需要调研的 ASIN（Top 10）")
             top_asins = aba_result.get("top_asins", [])[:10]
@@ -428,7 +426,6 @@ elif st.session_state.step == 2:
                     mime="text/plain"
                 )
             
-            # 细分市场聚类（展示）
             st.markdown("---")
             st.markdown("#### 📂 初步识别的细分市场")
             if clusters:
@@ -441,7 +438,6 @@ elif st.session_state.step == 2:
             else:
                 st.info("未识别出明显聚类，可继续上传补充数据后重新分析")
             
-            # 存储
             st.session_state.aba_preview = {
                 "total_keywords": aba_result.get("total_keywords", 0),
                 "top_non_brand": top_non_brand,
@@ -469,13 +465,12 @@ elif st.session_state.step == 2:
                 st.rerun()
 
 # ============================================================
-# STEP 3: 上传补充数据（含历史数据 + ASIN绑定）
+# STEP 3: 上传补充数据
 # ============================================================
 elif st.session_state.step == 3:
     st.markdown("### 📂 Step 3: 上传补充数据文件")
     st.markdown("上传从卖家精灵、Sif等工具导出的深度数据，AI 将自动清洗和绑定")
 
-    # 显示当前的关键词和ASIN清单
     if st.session_state.aba_preview:
         with st.expander("📋 当前需要调研的关键词 (Top 20)", expanded=False):
             top_words = [item.get("search_term", "") for item in st.session_state.aba_preview.get("top_non_brand", [])[:20]]
@@ -492,7 +487,6 @@ elif st.session_state.step == 3:
     4. 生成关键词数据表、ASIN数据表、趋势验证表
     """)
 
-    # 历史数据上传区域
     st.markdown("#### 卖家精灵历史数据（推荐）")
     hist_cols = st.columns(2)
     with hist_cols[0]:
@@ -525,7 +519,6 @@ elif st.session_state.step == 3:
                 except Exception as e:
                     st.error(f"解析失败: {e}")
 
-    # 标准数据表上传（备选）
     st.markdown("#### 标准数据表（备选，如没有历史数据）")
     st.caption("如果上传了历史数据，以下内容将自动生成，无需手动上传")
     file_configs = {
@@ -557,7 +550,6 @@ elif st.session_state.step == 3:
                 except Exception as e:
                     st.error(f"❌ 读取失败: {e}")
 
-    # 检查必填：至少要有历史数据或标准数据
     has_hist = ('hist_keyword_df' in st.session_state and st.session_state.hist_keyword_df is not None) or \
                ('hist_asin_df' in st.session_state and st.session_state.hist_asin_df is not None)
     has_std = ('keyword' in st.session_state.mapped_dfs and 'asin' in st.session_state.mapped_dfs)
@@ -578,7 +570,6 @@ elif st.session_state.step == 3:
             st.rerun()
     with col2:
         if st.button("下一步 →", type="primary", use_container_width=True):
-            # 校验：至少要有一种数据
             if not has_hist and not has_std:
                 st.error("请至少上传历史数据或标准数据表")
             else:
@@ -586,17 +577,15 @@ elif st.session_state.step == 3:
                 st.rerun()
 
 # ============================================================
-# STEP 4: 预览校验（含AI绑定结果）
+# STEP 4: 预览校验
 # ============================================================
 elif st.session_state.step == 4:
     st.markdown("### 🔍 Step 4: 数据预览与校验")
     
-    # 展示所有已上传文件
     st.markdown("#### 📂 已加载数据文件")
     for key, name in st.session_state.uploaded_file_names.items():
         st.markdown(f"✅ **{key}**: {name}")
     
-    # 显示AI绑定结果
     if 'hist_keyword_df' in st.session_state and st.session_state.hist_keyword_df is not None:
         st.markdown("#### 📊 关键词数据（来自历史）")
         st.dataframe(st.session_state.hist_keyword_df.head(5))
@@ -607,7 +596,6 @@ elif st.session_state.step == 4:
         st.dataframe(st.session_state.hist_asin_df.head(5))
         st.caption(f"共 {len(st.session_state.hist_asin_df)} 个ASIN")
     
-    # 如果有标准数据，也显示
     if 'keyword' in st.session_state.mapped_dfs:
         st.markdown("#### 📊 关键词数据（标准表）")
         st.dataframe(st.session_state.mapped_dfs['keyword'].head(5))
@@ -617,7 +605,6 @@ elif st.session_state.step == 4:
 
     st.divider()
     st.markdown("#### 📋 数据完整性检查")
-    # 简单的完整性检查
     issues = []
     if 'hist_keyword_df' in st.session_state and st.session_state.hist_keyword_df is not None:
         df = st.session_state.hist_keyword_df
@@ -642,8 +629,6 @@ elif st.session_state.step == 4:
         if st.button("🚀 开始分析", type="primary", use_container_width=True):
             with st.spinner("正在执行分析..."):
                 try:
-                    # 准备数据
-                    # 1. 关键词数据：优先使用历史数据，否则用标准表
                     if 'hist_keyword_df' in st.session_state and st.session_state.hist_keyword_df is not None:
                         keyword_df = st.session_state.hist_keyword_df
                     elif 'keyword' in st.session_state.mapped_dfs:
@@ -651,7 +636,6 @@ elif st.session_state.step == 4:
                     else:
                         keyword_df = None
                     
-                    # 2. ASIN数据
                     if 'hist_asin_df' in st.session_state and st.session_state.hist_asin_df is not None:
                         asin_df = st.session_state.hist_asin_df
                     elif 'asin' in st.session_state.mapped_dfs:
@@ -659,7 +643,6 @@ elif st.session_state.step == 4:
                     else:
                         asin_df = None
                     
-                    # 3. 趋势数据
                     if 'hist_trend_df' in st.session_state and st.session_state.hist_trend_df is not None:
                         trend_df = st.session_state.hist_trend_df
                     elif 'trend' in st.session_state.mapped_dfs:
@@ -667,16 +650,13 @@ elif st.session_state.step == 4:
                     else:
                         trend_df = None
                     
-                    # 4. 评论数据
                     if 'review' in st.session_state.mapped_dfs:
                         review_df = st.session_state.mapped_dfs['review']
                     else:
                         review_df = None
                     
-                    # 5. ABA结果
                     aba_result = st.session_state.aba_raw if 'aba_raw' in st.session_state else None
                     
-                    # 执行聚类（可能重复，但确保使用最新数据）
                     use_ai = st.session_state.ai_enabled
                     api_key = st.session_state.api_key if use_ai else None
                     model = st.session_state.model if use_ai else None
@@ -694,7 +674,6 @@ elif st.session_state.step == 4:
                     else:
                         clusters = []
                     
-                    # 权重分级
                     total_keywords = aba_result.get("total_keywords", 1) if aba_result else 1
                     for cluster in clusters:
                         cluster["weight_level"] = assign_weight_level(
@@ -702,7 +681,6 @@ elif st.session_state.step == 4:
                             total_keywords
                         )
                     
-                    # 10维评分
                     scored_markets = []
                     for cluster in clusters:
                         scores = calculate_10d_scores(
@@ -713,12 +691,10 @@ elif st.session_state.step == 4:
                         )
                         scored_markets.append(scores)
                     
-                    # 趋势验证
                     if trend_df is not None:
                         for market in scored_markets:
                             market["trend_result"] = trend_verification(market, trend_df)
                     
-                    # 评论分析
                     comment_insights = []
                     if review_df is not None:
                         comment_insights = analyze_comments(
@@ -730,7 +706,6 @@ elif st.session_state.step == 4:
                             base_url=base_url
                         )
                     
-                    # 生成报告
                     excel_data = generate_excel_report(
                         scored_markets,
                         {"keyword": keyword_df, "asin": asin_df, "trend": trend_df, "review": review_df},
