@@ -10,64 +10,14 @@ import io
 from datetime import datetime
 import re
 
-# ============ 页面配置 ============
-st.set_page_config(
-    page_title="ABA利基分析工具 v3.0",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# 如果有其他自定义模块，导入放在这里
+from core.parser import parse_aba_csv
 
-# ============ CSS ============
-st.markdown("""
-<style>
-    .main-header { font-size: 2.5rem; font-weight: 700; color: #1a5276; text-align: center; padding: 1rem 0; }
-    .sub-header { font-size: 1.2rem; color: #2c3e50; text-align: center; margin-bottom: 2rem; }
-    .badge-s { background-color: #27ae60; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
-    .badge-a { background-color: #2e86c1; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
-    .badge-b { background-color: #f39c12; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
-    .badge-c { background-color: #e67e22; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
-    .badge-d { background-color: #e74c3c; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
-    .data-legend { background-color: #f0f3f5; padding: 0.8rem 1.2rem; border-radius: 8px; margin: 0.5rem 0; border-left: 4px solid #1a5276; }
-    .data-legend table { width: 100%; font-size: 0.9rem; }
-    .data-legend td { padding: 0.2rem 0.8rem 0.2rem 0; }
-    .data-legend .field-name { font-weight: 600; color: #1a5276; }
-    .data-legend .field-desc { color: #2c3e50; }
-    .data-legend .field-meaning { color: #7f8c8d; font-size: 0.85rem; }
-</style>
-""", unsafe_allow_html=True)
+# ============================================================
+# 辅助函数（必须在业务逻辑之前定义）
+# ============================================================
 
-# ============ 初始化 Session State ============
-if "step" not in st.session_state:
-    st.session_state.step = 1
-if "project_name" not in st.session_state:
-    st.session_state.project_name = ""
-if "category" not in st.session_state:
-    st.session_state.category = ""
-if "date_range" not in st.session_state:
-    st.session_state.date_range = []
-if "merged_keywords" not in st.session_state:
-    st.session_state.merged_keywords = None
-if "merged_asins" not in st.session_state:
-    st.session_state.merged_asins = None
-if "aba_preview" not in st.session_state:
-    st.session_state.aba_preview = None
-if "uploaded_files" not in st.session_state:
-    st.session_state.uploaded_files = {}
-if "analysis_result" not in st.session_state:
-    st.session_state.analysis_result = None
-if "analysis_complete" not in st.session_state:
-    st.session_state.analysis_complete = False
-if "ai_enabled" not in st.session_state:
-    st.session_state.ai_enabled = False
-if "api_key" not in st.session_state:
-    st.session_state.api_key = ""
-if "model" not in st.session_state:
-    st.session_state.model = "deepseek-chat"
-if "base_url" not in st.session_state:
-    st.session_state.base_url = "https://api.deepseek.com/v1"
-
-# ============ 内置中文->英文列名映射（AI 回退） ============
+# ---------- 内置中文->英文列名映射 ----------
 CHINESE_COLUMN_MAP = {
     # 关键词数据表
     "关键词": "keyword",
@@ -109,7 +59,7 @@ CHINESE_COLUMN_MAP = {
     "卖点": "modifier",
 }
 
-# ============ 字段要求配置 ============
+# ---------- 字段要求配置 ----------
 FIELD_REQUIREMENTS = {
     "keyword": {
         "required": ["keyword", "monthly_search_volume", "purchase_rate", "ppc_bid", "supply_demand_ratio", "click_concentration", "search_growth_rate", "avg_price"],
@@ -138,7 +88,27 @@ FIELD_REQUIREMENTS = {
     }
 }
 
-# ============ AI 辅助函数 ============
+# ---------- 文件读取函数 ----------
+def safe_read_file(file):
+    """安全读取 CSV 或 Excel 文件"""
+    ext = file.name.split('.')[-1].lower()
+    try:
+        if ext == 'csv':
+            try:
+                return pd.read_csv(file, encoding='utf-8')
+            except UnicodeDecodeError:
+                file.seek(0)
+                return pd.read_csv(file, encoding='gbk')
+        else:
+            try:
+                return pd.read_excel(file, engine='openpyxl')
+            except Exception:
+                file.seek(0)
+                return pd.read_excel(file, engine='xlrd')
+    except Exception as e:
+        raise ValueError(f"无法读取文件: {e}")
+
+# ---------- AI 列名映射函数 ----------
 def smart_column_mapping(df, file_type, use_ai, api_key, model, base_url):
     """
     智能列名映射：优先 AI，失败则回退到内置字典
@@ -199,25 +169,7 @@ def smart_column_mapping(df, file_type, use_ai, api_key, model, base_url):
     
     return df
 
-def safe_read_file(file):
-    """安全读取 CSV 或 Excel 文件"""
-    ext = file.name.split('.')[-1].lower()
-    try:
-        if ext == 'csv':
-            try:
-                return pd.read_csv(file, encoding='utf-8')
-            except UnicodeDecodeError:
-                file.seek(0)
-                return pd.read_csv(file, encoding='gbk')
-        else:
-            try:
-                return pd.read_excel(file, engine='openpyxl')
-            except Exception:
-                file.seek(0)
-                return pd.read_excel(file, engine='xlrd')
-    except Exception as e:
-        raise ValueError(f"无法读取文件: {e}")
-
+# ---------- 上传文件处理函数 ----------
 def process_uploaded_file(uploaded_file, file_type, use_ai, api_key, model, base_url):
     """
     处理上传文件：读取 → 列映射 → 校验 → 返回 DataFrame
@@ -259,12 +211,95 @@ def process_uploaded_file(uploaded_file, file_type, use_ai, api_key, model, base
     except Exception as e:
         return None, f"处理失败: {e}"
 
-# ============ 合并函数 ============
+
+# ============================================================
+# 页面配置 & CSS
+# ============================================================
+st.set_page_config(
+    page_title="ABA利基分析工具 v3.0",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #1a5276; text-align: center; padding: 1rem 0; }
+    .sub-header { font-size: 1.2rem; color: #2c3e50; text-align: center; margin-bottom: 2rem; }
+    .badge-s { background-color: #27ae60; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
+    .badge-a { background-color: #2e86c1; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
+    .badge-b { background-color: #f39c12; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
+    .badge-c { background-color: #e67e22; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
+    .badge-d { background-color: #e74c3c; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
+    .data-legend { background-color: #f0f3f5; padding: 0.8rem 1.2rem; border-radius: 8px; margin: 0.5rem 0; border-left: 4px solid #1a5276; }
+    .data-legend table { width: 100%; font-size: 0.9rem; }
+    .data-legend td { padding: 0.2rem 0.8rem 0.2rem 0; }
+    .data-legend .field-name { font-weight: 600; color: #1a5276; }
+    .data-legend .field-desc { color: #2c3e50; }
+    .data-legend .field-meaning { color: #7f8c8d; font-size: 0.85rem; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# Session State 初始化
+# ============================================================
+if "step" not in st.session_state:
+    st.session_state.step = 1
+if "project_name" not in st.session_state:
+    st.session_state.project_name = ""
+if "category" not in st.session_state:
+    st.session_state.category = ""
+if "date_range" not in st.session_state:
+    st.session_state.date_range = []
+if "merged_keywords" not in st.session_state:
+    st.session_state.merged_keywords = None
+if "merged_asins" not in st.session_state:
+    st.session_state.merged_asins = None
+if "aba_preview" not in st.session_state:
+    st.session_state.aba_preview = None
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = {}
+if "mapped_dfs" not in st.session_state:
+    st.session_state.mapped_dfs = {}
+if "analysis_result" not in st.session_state:
+    st.session_state.analysis_result = None
+if "analysis_complete" not in st.session_state:
+    st.session_state.analysis_complete = False
+if "ai_enabled" not in st.session_state:
+    st.session_state.ai_enabled = False
+if "api_key" not in st.session_state:
+    st.session_state.api_key = ""
+if "model" not in st.session_state:
+    st.session_state.model = "deepseek-chat"
+if "base_url" not in st.session_state:
+    st.session_state.base_url = "https://api.deepseek.com/v1"
+
+
+# ============================================================
+# 辅助 UI 函数
+# ============================================================
+def show_data_legend():
+    st.markdown("""
+    <div class="data-legend">
+        <b>📖 字段商业解读</b>
+        <table>
+            <tr><td><span class="field-name">🔴 ABA排名</span></td><td><span class="field-desc">搜索频率排名（数字越小搜索量越大）</span></td><td><span class="field-meaning">≤ 10,000 = 高流量 | ≤ 50,000 = 中流量 | >50,000 = 低流量</span></td></tr>
+            <tr><td><span class="field-name">📈 点击份额(%)</span></td><td><span class="field-desc">Top1 ASIN 在该搜索词下获得的点击占比</span></td><td><span class="field-meaning">越高 → 头部垄断越强 → 进入难度越大</span></td></tr>
+            <tr><td><span class="field-name">🔄 转化份额(%)</span></td><td><span class="field-desc">Top1 ASIN 在该搜索词下获得的订单占比</span></td><td><span class="field-meaning">越高 → 头部变现能力越强 → 竞争越激烈</span></td></tr>
+            <tr><td><span class="field-name">📦 关联ASIN数</span></td><td><span class="field-desc">该关键词下出现的不同 ASIN 数量</span></td><td><span class="field-meaning">越多 → 市场越分散 → 蓝海机会越大</span></td></tr>
+        </table>
+        <i>💡 平均点击份额评级：&lt;5% 低垄断 ✅ | 5%~10% 中等 ⚠️ | &gt;10% 高垄断 ❌</i>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ============================================================
+# 合并函数（用于 Step 2）
+# ============================================================
 def merge_aba_files(uploaded_files, use_ai=False, api_key=None, model=None, base_url=None):
-    # ... (保持原有逻辑不变) ...
     all_keywords = []
     all_asins = []
-    from core.parser import parse_aba_csv
     for file in uploaded_files:
         try:
             file_bytes = file.getvalue()
@@ -353,20 +388,10 @@ def merge_aba_files(uploaded_files, use_ai=False, api_key=None, model=None, base
     }
     return merged, sorted_asins, stats
 
-def show_data_legend():
-    st.markdown("""
-    <div class="data-legend">
-        <b>📖 字段商业解读</b>
-        <table>
-            <tr><td><span class="field-name">🔴 ABA排名</span></td><td><span class="field-desc">搜索频率排名（数字越小搜索量越大）</span></td><td><span class="field-meaning">≤ 10,000 = 高流量 | ≤ 50,000 = 中流量 | >50,000 = 低流量</span></td></tr>
-            <tr><td><span class="field-name">📈 点击份额(%)</span></td><td><span class="field-desc">Top1 ASIN 在该搜索词下获得的点击占比</span></td><td><span class="field-meaning">越高 → 头部垄断越强 → 进入难度越大</span></td></tr>
-            <tr><td><span class="field-name">🔄 转化份额(%)</span></td><td><span class="field-desc">Top1 ASIN 在该搜索词下获得的订单占比</span></td><td><span class="field-meaning">越高 → 头部变现能力越强 → 竞争越激烈</span></td></tr>
-            <tr><td><span class="field-name">📦 关联ASIN数</span></td><td><span class="field-desc">该关键词下出现的不同 ASIN 数量</span></td><td><span class="field-meaning">越多 → 市场越分散 → 蓝海机会越大</span></td></tr>
-        </table>
-        <i>💡 平均点击份额评级：&lt;5% 低垄断 ✅ | 5%~10% 中等 ⚠️ | &gt;10% 高垄断 ❌</i>
-    </div>
-    """, unsafe_allow_html=True)
 
+# ============================================================
+# 类目列表
+# ============================================================
 CATEGORIES_LEVEL2 = [
     "请选择类目",
     "Electronics > Headphones", "Electronics > Speakers", "Electronics > Smartwatches",
@@ -401,7 +426,10 @@ CATEGORIES_LEVEL2 = [
     "Books > Fiction", "Books > Non-Fiction", "Books > Children"
 ]
 
-# ============ 侧边栏 ============
+
+# ============================================================
+# 侧边栏
+# ============================================================
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/amazon.png", width=50)
     st.markdown("### 📊 分析进度")
@@ -482,12 +510,16 @@ with st.sidebar:
     st.divider()
     st.caption(f"📅 v3.0 | {datetime.now().strftime('%Y-%m-%d')}")
 
-# ============ 主界面 ============
+
+# ============================================================
+# 主界面
+# ============================================================
 st.markdown('<p class="main-header">🚀 ABA利基分析工具 v3.0</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">AI 智能列映射 · 多文件合并 · 全流程选品</p>', unsafe_allow_html=True)
 
+
 # ============================================================
-# STEP 1
+# STEP 1: 项目设置
 # ============================================================
 if st.session_state.step == 1:
     st.markdown("### ⚙️ Step 1: 项目设置")
@@ -516,8 +548,9 @@ if st.session_state.step == 1:
                 st.session_state.step = 2
                 st.rerun()
 
+
 # ============================================================
-# STEP 2
+# STEP 2: 上传 ABA 数据（多文件合并）
 # ============================================================
 elif st.session_state.step == 2:
     st.markdown("### 📂 Step 2: 上传ABA数据（可上传2~5个文件）")
@@ -642,6 +675,7 @@ elif st.session_state.step == 2:
                 st.session_state.step = 3
                 st.rerun()
 
+
 # ============================================================
 # STEP 3: 上传补充数据文件（AI 增强版）
 # ============================================================
@@ -727,8 +761,6 @@ elif st.session_state.step == 3:
                     st.success(f"✅ 已上传并映射成功: {uploaded.name} ({len(df)} 行)")
                     
                     # 存储映射后的 DataFrame
-                    if "mapped_dfs" not in st.session_state:
-                        st.session_state.mapped_dfs = {}
                     st.session_state.mapped_dfs[key] = df
                     
                     # 显示数据摘要
@@ -763,6 +795,8 @@ elif st.session_state.step == 3:
             else:
                 st.session_state.step = 4
                 st.rerun()
+
+
 # ============================================================
 # STEP 4: 预览校验
 # ============================================================
@@ -771,7 +805,7 @@ elif st.session_state.step == 4:
     
     # 显示所有已上传文件的摘要
     for key, file_name in st.session_state.uploaded_files.items():
-        if "mapped_dfs" in st.session_state and key in st.session_state.mapped_dfs:
+        if key in st.session_state.mapped_dfs:
             df = st.session_state.mapped_dfs[key]
             st.markdown(f"✅ **{key}**: {file_name} ({len(df)} 行, {len(df.columns)} 列)")
             with st.expander(f"📊 {key} 数据预览"):
@@ -784,7 +818,7 @@ elif st.session_state.step == 4:
     
     # 检查关键词数据表
     if "keyword" in st.session_state.uploaded_files:
-        if "mapped_dfs" in st.session_state and "keyword" in st.session_state.mapped_dfs:
+        if "keyword" in st.session_state.mapped_dfs:
             df = st.session_state.mapped_dfs["keyword"]
             required = ["keyword", "monthly_search_volume", "purchase_rate", "ppc_bid", "supply_demand_ratio", "click_concentration", "search_growth_rate", "avg_price"]
             missing = [f for f in required if f not in df.columns]
@@ -796,7 +830,7 @@ elif st.session_state.step == 4:
             st.warning("⚠️ 关键词数据表未加载")
     
     if "asin" in st.session_state.uploaded_files:
-        if "mapped_dfs" in st.session_state and "asin" in st.session_state.mapped_dfs:
+        if "asin" in st.session_state.mapped_dfs:
             df = st.session_state.mapped_dfs["asin"]
             required = ["asin", "keyword", "price", "rating", "review_count", "bsr", "listing_date"]
             missing = [f for f in required if f not in df.columns]
@@ -818,10 +852,9 @@ elif st.session_state.step == 4:
                 try:
                     # 读取所有映射后的 DataFrame
                     data = {}
-                    if "mapped_dfs" in st.session_state:
-                        for key in ["keyword", "asin", "review", "sif", "trend"]:
-                            if key in st.session_state.mapped_dfs:
-                                data[key] = st.session_state.mapped_dfs[key]
+                    for key in ["keyword", "asin", "review", "sif", "trend"]:
+                        if key in st.session_state.mapped_dfs:
+                            data[key] = st.session_state.mapped_dfs[key]
                     
                     use_ai = st.session_state.ai_enabled
                     api_key = st.session_state.api_key if use_ai else None
@@ -845,9 +878,6 @@ elif st.session_state.step == 4:
                         st.warning(f"⚠️ 聚类模块未加载: {e}")
                         clusters = []
                     
-                    # 这里可以继续调用评分和报告生成模块
-                    # 例如：scored_markets = calculate_10d_scores(...)
-                    
                     st.success("✅ 初步分析完成！")
                     st.balloons()
                     st.session_state.step = 5
@@ -856,8 +886,10 @@ elif st.session_state.step == 4:
                     st.error(f"❌ 分析失败: {e}")
                     import traceback
                     st.code(traceback.format_exc())
+
+
 # ============================================================
-# STEP 5
+# STEP 5: 分析完成
 # ============================================================
 elif st.session_state.step == 5:
     st.markdown("### 🎉 Step 5: 分析完成！")
