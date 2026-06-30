@@ -492,47 +492,221 @@ elif st.session_state.step == 2:
                 st.rerun()
 
 # ============================================================
-# STEP 3
+# STEP 3: 上传补充数据文件（增强版）
 # ============================================================
 elif st.session_state.step == 3:
     st.markdown("### 📂 Step 3: 上传补充数据文件")
-    st.info("""
-    **📌 文件说明：**
-    - ✅ **必填**：关键词数据表、ASIN数据表
-    - ⚠️ **条件必填**：评论数据表（当ASIN评论数>200时必须提供）
-    - ⬜ **可选**：Sif流量词表、趋势验证表
-    """)
-    file_configs = {
-        "keyword": {"label": "📊 关键词数据表 *", "help": "卖家精灵导出的关键词深度数据"},
-        "asin": {"label": "📦 ASIN数据表 *", "help": "卖家精灵导出的ASIN详情数据"},
-        "review": {"label": "💬 评论数据表", "help": "评论数>200的ASIN需提供"},
-        "sif": {"label": "🔗 Sif流量词表", "help": "Sif反查流量词结果"},
-        "trend": {"label": "📈 趋势验证表", "help": "销量/价格变化数据"}
-    }
-    cols = st.columns(2)
-    for idx, (key, config) in enumerate(file_configs.items()):
-        with cols[idx % 2]:
-            uploaded = st.file_uploader(config["label"], type=["csv","xlsx","xls"], key=f"upload_{key}", help=config["help"])
-            if uploaded is not None:
-                st.session_state.uploaded_files[key] = uploaded
-                try:
-                    ext = uploaded.name.split('.')[-1].lower()
-                    if ext == 'csv':
-                        try:
-                            df = pd.read_csv(uploaded, encoding='utf-8')
-                        except:
-                            df = pd.read_csv(uploaded, encoding='gbk')
-                    else:
-                        df = pd.read_excel(uploaded, engine='openpyxl')
-                    st.success(f"✅ 已上传: {uploaded.name} ({len(df)} 行)")
-                except Exception as e:
-                    st.error(f"❌ 读取失败: {e}")
+    st.markdown("上传从卖家精灵、Sif等工具导出的深度数据")
     
-    missing = [k for k in ["keyword","asin"] if k not in st.session_state.uploaded_files]
+    # 显示当前选中的关键词和ASIN
+    if st.session_state.merged_keywords:
+        with st.expander("📋 当前需要调研的关键词 (Top 20)", expanded=False):
+            keywords_display = [item.get("search_term", "") for item in st.session_state.merged_keywords[:20]]
+            st.write(", ".join(keywords_display))
+            st.caption(f"共 {len(st.session_state.merged_keywords)} 个关键词，建议对 Top 20 逐一查询")
+    
+    if st.session_state.merged_asins:
+        with st.expander("📦 当前需要调研的 ASIN (Top 10)", expanded=False):
+            asins_display = [asin for asin, _ in st.session_state.merged_asins[:10]]
+            st.write(", ".join(asins_display))
+            st.caption(f"共 {len(st.session_state.merged_asins)} 个 ASIN，建议对 Top 10 逐一查询")
+    
+    st.info("""
+    **📌 数据流说明：**
+    - Phase 2 输出了 **20 个关键词** 和 **10 个 ASIN**
+    - 你需要在卖家精灵/Sif 中**逐一查询**这些词和 ASIN
+    - 每个工具导出的数据可以**合并成一个 CSV** 后上传
+    - 系统会自动合并去重，无需担心重复
+    """)
+    
+    # ===== 1. 关键词数据表 =====
+    with st.expander("📊 1. 关键词数据表 *（必填）", expanded=True):
+        st.markdown("""
+        | 项目 | 说明 |
+        |------|------|
+        | **来源工具** | 卖家精灵 (SellerSprite) |
+        | **下载路径** | 关键词挖掘 → 输入关键词 → 查询 → 导出 |
+        | **数据范围** | 对 Top 20 关键词逐一查询，导出 Top 1000 个相关词 |
+        | **时间约束** | 选择最近 30 天数据 |
+        | **销量约束** | 过滤月搜索量 < 1000 的词 |
+        | **合并方式** | 多个关键词导出的 CSV 可合并为 1 个文件上传 |
+        | **必需字段** | `keyword`, `monthly_search_volume`, `purchase_rate`, `ppc_bid`, `supply_demand_ratio`, `click_concentration`, `search_growth_rate`, `avg_price` |
+        """)
+        uploaded_keyword = st.file_uploader(
+            "上传关键词数据表",
+            type=["csv", "xlsx", "xls"],
+            key="upload_keyword",
+            help="支持多个关键词导出的合并文件"
+        )
+        if uploaded_keyword is not None:
+            st.session_state.uploaded_files["keyword"] = uploaded_keyword
+            try:
+                ext = uploaded_keyword.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(uploaded_keyword, encoding='utf-8') if 'utf-8' else pd.read_csv(uploaded_keyword, encoding='gbk')
+                else:
+                    df = pd.read_excel(uploaded_keyword, engine='openpyxl')
+                st.success(f"✅ 已上传: {uploaded_keyword.name} ({len(df)} 行)")
+            except Exception as e:
+                st.error(f"❌ 读取失败: {e}")
+    
+    # ===== 2. ASIN数据表 =====
+    with st.expander("📦 2. ASIN数据表 *（必填）", expanded=True):
+        st.markdown("""
+        | 项目 | 说明 |
+        |------|------|
+        | **来源工具** | 卖家精灵 (SellerSprite) |
+        | **下载路径** | 查竞品 → 输入 ASIN → 选择最近 30 天 → 导出 |
+        | **数据范围** | 对 Top 10 ASIN 逐一查询，导出完整详情 |
+        | **时间约束** | 选择最近 30 天数据 |
+        | **评论约束** | 筛选评论数 ≥ 50 的 ASIN |
+        | **合并方式** | 多个 ASIN 导出的 CSV 可合并为 1 个文件上传 |
+        | **必需字段** | `asin`, `keyword`, `price`, `rating`, `review_count`, `bsr`, `listing_date` |
+        """)
+        uploaded_asin = st.file_uploader(
+            "上传 ASIN 数据表",
+            type=["csv", "xlsx", "xls"],
+            key="upload_asin",
+            help="支持多个 ASIN 导出的合并文件"
+        )
+        if uploaded_asin is not None:
+            st.session_state.uploaded_files["asin"] = uploaded_asin
+            try:
+                ext = uploaded_asin.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(uploaded_asin, encoding='utf-8') if 'utf-8' else pd.read_csv(uploaded_asin, encoding='gbk')
+                else:
+                    df = pd.read_excel(uploaded_asin, engine='openpyxl')
+                st.success(f"✅ 已上传: {uploaded_asin.name} ({len(df)} 行)")
+            except Exception as e:
+                st.error(f"❌ 读取失败: {e}")
+    
+    # ===== 3. 评论数据表 =====
+    with st.expander("💬 3. 评论数据表（条件必填）"):
+        st.markdown("""
+        | 项目 | 说明 |
+        |------|------|
+        | **来源工具** | 卖家精灵插件 |
+        | **下载路径** | 目标 Listing 页 → 评论分析 → 导出 |
+        | **触发条件** | **仅当 ASIN 评论数 > 200 时必须提供** |
+        | **时间约束** | 导出最近 3 个月评论 |
+        | **数量约束** | 每个 ASIN 最多 500 条评论 |
+        | **合并方式** | 每个 ASIN 单独导出，可合并为 1 个文件 |
+        | **必需字段** | `asin`, `review_date`, `rating`, `review_title`, `review_body` |
+        """)
+        uploaded_review = st.file_uploader(
+            "上传评论数据表（可选）",
+            type=["csv", "xlsx", "xls"],
+            key="upload_review",
+            help="仅当 ASIN 评论数 > 200 时必须提供"
+        )
+        if uploaded_review is not None:
+            st.session_state.uploaded_files["review"] = uploaded_review
+            try:
+                ext = uploaded_review.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(uploaded_review, encoding='utf-8') if 'utf-8' else pd.read_csv(uploaded_review, encoding='gbk')
+                else:
+                    df = pd.read_excel(uploaded_review, engine='openpyxl')
+                st.success(f"✅ 已上传: {uploaded_review.name} ({len(df)} 行)")
+            except Exception as e:
+                st.error(f"❌ 读取失败: {e}")
+    
+    # ===== 4. Sif流量词表 =====
+    with st.expander("🔗 4. Sif流量词表（可选）"):
+        st.markdown("""
+        | 项目 | 说明 |
+        |------|------|
+        | **来源工具** | Sif (www.sif.com) |
+        | **下载路径** | 反查流量词 → 输入 ASIN → 下载 |
+        | **数据范围** | 对 Top 5 ASIN 反查流量词 |
+        | **时间约束** | 选择最近 30 天数据 |
+        | **合并方式** | 每个 ASIN 单独导出，可合并为 1 个文件 |
+        | **必需字段** | `keyword`, `自然流量占比`, `SP广告占比`, `SB广告占比`, `ABA TOP3集中度` |
+        """)
+        uploaded_sif = st.file_uploader(
+            "上传 Sif 流量词表（可选）",
+            type=["csv", "xlsx", "xls"],
+            key="upload_sif",
+            help="建议对 Top 5 ASIN 反查流量词"
+        )
+        if uploaded_sif is not None:
+            st.session_state.uploaded_files["sif"] = uploaded_sif
+            try:
+                ext = uploaded_sif.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(uploaded_sif, encoding='utf-8') if 'utf-8' else pd.read_csv(uploaded_sif, encoding='gbk')
+                else:
+                    df = pd.read_excel(uploaded_sif, engine='openpyxl')
+                st.success(f"✅ 已上传: {uploaded_sif.name} ({len(df)} 行)")
+            except Exception as e:
+                st.error(f"❌ 读取失败: {e}")
+    
+    # ===== 5. 趋势验证表 =====
+    with st.expander("📈 5. 趋势验证表（可选）"):
+        st.markdown("""
+        | 项目 | 说明 |
+        |------|------|
+        | **来源工具** | 卖家精灵 (SellerSprite) |
+        | **下载路径** | 查竞品 → 输入 ASIN → 选择历史月份 → 导出明细 |
+        | **数据范围** | 对核心 ASIN（3-5 个）追踪历史数据 |
+        | **时间约束** | 对比上架首月 vs 最近一个月 |
+        | **销量约束** | 筛选月销量 ≥ 100 的 ASIN |
+        | **合并方式** | 每个 ASIN 单独导出，可合并为 1 个文件 |
+        | **必需字段** | `asin`, `keyword`, `modifier`, `initial_price`, `current_price`, `initial_monthly_sales`, `current_monthly_sales`, `listing_date` |
+        """)
+        uploaded_trend = st.file_uploader(
+            "上传趋势验证表（可选）",
+            type=["csv", "xlsx", "xls"],
+            key="upload_trend",
+            help="建议对核心 ASIN 追踪历史销量和价格变化"
+        )
+        if uploaded_trend is not None:
+            st.session_state.uploaded_files["trend"] = uploaded_trend
+            try:
+                ext = uploaded_trend.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(uploaded_trend, encoding='utf-8') if 'utf-8' else pd.read_csv(uploaded_trend, encoding='gbk')
+                else:
+                    df = pd.read_excel(uploaded_trend, engine='openpyxl')
+                st.success(f"✅ 已上传: {uploaded_trend.name} ({len(df)} 行)")
+            except Exception as e:
+                st.error(f"❌ 读取失败: {e}")
+    
+    # ===== 检查必填项 =====
+    missing = []
+    if "keyword" not in st.session_state.uploaded_files:
+        missing.append("关键词数据表")
+    if "asin" not in st.session_state.uploaded_files:
+        missing.append("ASIN数据表")
+    
     if missing:
         st.warning(f"⚠️ 请上传: {', '.join(missing)}")
     
-    col1, col2, col3 = st.columns([1,1,1])
+    # ===== 多文件合并说明 =====
+    with st.expander("📖 多文件合并说明"):
+        st.markdown("""
+        **Q: 是否需要为每个关键词/ASIN单独导出一个表格？**
+        
+        A: 不需要。你可以：
+        1. 在卖家精灵中**逐一查询**每个关键词/ASIN
+        2. 每次查询后点击**导出**
+        3. 将多次导出的 CSV 文件**合并成一个文件**（用 Excel 或记事本合并）
+        4. 上传合并后的文件
+        
+        **Q: 如果上传多个文件会怎样？**
+        
+        A: 系统会自动合并去重：
+        - 相同关键词的多条记录 → 保留数据最完整的那条
+        - 相同 ASIN 的多条记录 → 保留数据最完整的那条
+        - 系统会保留所有来源文件信息
+        
+        **Q: 我不小心上传了重复文件怎么办？**
+        
+        A: 系统会自动检测并去重，不会影响分析结果。
+        """)
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         if st.button("← 上一步"):
             st.session_state.step = 2
@@ -544,7 +718,6 @@ elif st.session_state.step == 3:
             else:
                 st.session_state.step = 4
                 st.rerun()
-
 # ============================================================
 # STEP 4
 # ============================================================
