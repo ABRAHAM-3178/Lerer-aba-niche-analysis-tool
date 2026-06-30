@@ -37,7 +37,6 @@ def score_market_size(monthly_search_volume: Optional[float], rank: Optional[flo
         else:
             return 2.0
     
-    # 备用：使用排名
     if rank is not None:
         if rank < 5000:
             return 9.0
@@ -69,7 +68,6 @@ def score_conversion_potential(purchase_rate: Optional[float], conversion_share:
         else:
             return 1.0
     
-    # 备用：使用ABA转化份额
     if conversion_share is not None:
         if conversion_share > 70:
             return 9.0
@@ -102,14 +100,12 @@ def score_competition(click_concentration: Optional[float], spr: Optional[float]
         else:
             base = 10.0
         
-        # SPR调整
         if spr is not None:
             if spr < 5 and base < 5:
                 base -= 1.0
             elif spr > 30 and base > 5:
                 base += 1.0
         
-        # 供需比调整
         if supply_demand is not None:
             if supply_demand > 3 and base > 3:
                 base -= 1.0
@@ -155,7 +151,6 @@ def score_profit(price: Optional[float], ppc_bid: Optional[float]) -> float:
         else:
             base = 1.0
         
-        # PPC调整
         if ppc_bid is not None:
             if ppc_bid < 1.0 and price > 20:
                 base = min(10.0, base + 1.0)
@@ -392,5 +387,6 @@ def calculate_10d_scores(cluster: Dict[str, Any], keyword_df: pd.DataFrame = Non
         'final_score': round(final_score, 2),
         'grade': grade,
         'grade_label': grade_label,
-        'keywords': cluster.get('keywords', [])[:5]
+        'keywords': cluster.get('keywords', [])[:5],
+        'ai_generated': cluster.get('ai_generated', False)
     }
