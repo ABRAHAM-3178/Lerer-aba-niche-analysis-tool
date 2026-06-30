@@ -1,11 +1,11 @@
 """
-ABA利基分析工具 v3.0 - AI增强版
-全手动·可选AI·6维度选品报告
+ABA利基分析工具 v3.0 - AI深度集成版
+全手动·AI增强·6维度选品报告
 """
 
 import streamlit as st
 import pandas as pd
-import io
+import json
 from datetime import datetime
 
 from core.parser import parse_aba_csv
@@ -73,6 +73,148 @@ if "model" not in st.session_state:
 if "base_url" not in st.session_state:
     st.session_state.base_url = "https://api.deepseek.com/v1"
 
+# ============ AI 数据清洗函数 ============
+def ai_data_cleaning(df: pd.DataFrame, api_key: str, model: str, base_url: str) -> pd.DataFrame:
+    """使用 AI 智能识别列名并清洗数据"""
+    try:
+        from utils.ai_client import AIClient
+        from utils.prompts import DATA_CLEANING_PROMPT
+        
+        client = AIClient(api_key=api_key, model=model, base_url=base_url)
+        
+        # 获取列名和样本数据
+        columns = df.columns.tolist()
+        sample_data = df.head(5).to_dict('records')
+        
+        messages = [
+            {"role": "system", "content": "你是一个数据分析专家，擅长清洗亚马逊ABA数据。"},
+            {"role": "user", "content": DATA_CLEANING_PROMPT.format(
+                columns=json.dumps(columns, ensure_ascii=False),
+                sample_data=json.dumps(sample_data, ensure_ascii=False, default=str)
+            )}
+        ]
+        
+        result = client.chat_json(messages)
+        
+        # 根据AI建议重命名列
+        column_mapping = result.get("column_mapping", {})
+        if column_mapping:
+            df = df.rename(columns=column_mapping)
+        
+        # 处理异常值
+        for col, action in result.get("data_cleaning", {}).items():
+            if action == "drop_na":
+                df = df.dropna(subset=[col])
+            elif action == "strip":
+                df[col] = df[col].astype(str).str.strip()
+            elif action == "convert_float" and col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        st.success(f"🧠 AI 数据清洗完成: {result.get('summary', '已处理')}")
+        return df
+        
+    except Exception as e:
+        st.warning(f"⚠️ AI 数据清洗失败，使用本地逻辑: {e}")
+        return df
+
+
+def ai_discover_modifiers(keywords: list, api_key: str, model: str, base_url: str) -> dict:
+    """使用 AI 自动发现卖点"""
+    try:
+        from utils.ai_client import AIClient
+        from utils.prompts import MODIFIER_DISCOVERY_PROMPT
+        
+        client = AIClient(api_key=api_key, model=model, base_url=base_url)
+        
+        messages = [
+            {"role": "system", "content": "你是一个产品卖点分析专家。"},
+            {"role": "user", "content": MODIFIER_DISCOVERY_PROMPT.format(
+                keywords=", ".join(keywords[:50])
+            )}
+        ]
+        
+        result = client.chat_json(messages)
+        st.info(f"🧠 AI 发现 {len(result.get('modifiers', {}))} 个卖点分类")
+        return result
+        
+    except Exception as e:
+        st.warning(f"⚠️ AI 卖点发现失败: {e}")
+        return {}
+
+
+# ============ 二级类目列表 ============
+CATEGORIES_LEVEL2 = [
+    "请选择类目",
+    "Electronics > Headphones",
+    "Electronics > Speakers",
+    "Electronics > Smartwatches",
+    "Electronics > Projectors",
+    "Electronics > Cameras",
+    "Electronics > Drones",
+    "Electronics > Smart Home",
+    "Electronics > TVs",
+    "Computers > Laptops",
+    "Computers > Monitors",
+    "Computers > Keyboards",
+    "Computers > Mice",
+    "Computers > Storage",
+    "Computers > Printers",
+    "Computers > Networking",
+    "Cell Phones > Smartphones",
+    "Cell Phones > Cases",
+    "Cell Phones > Screen Protectors",
+    "Cell Phones > Chargers",
+    "Cell Phones > Power Banks",
+    "Home & Kitchen > Furniture",
+    "Home & Kitchen > Bedding",
+    "Home & Kitchen > Lighting",
+    "Home & Kitchen > Storage",
+    "Home & Kitchen > Cookware",
+    "Home & Kitchen > Small Appliances",
+    "Clothing > Men",
+    "Clothing > Women",
+    "Clothing > Kids",
+    "Shoes > Men",
+    "Shoes > Women",
+    "Shoes > Kids",
+    "Jewelry > Necklaces",
+    "Jewelry > Bracelets",
+    "Jewelry > Earrings",
+    "Jewelry > Rings",
+    "Beauty > Skincare",
+    "Beauty > Makeup",
+    "Beauty > Fragrance",
+    "Beauty > Hair Care",
+    "Toys & Games > Educational",
+    "Toys & Games > Plush",
+    "Toys & Games > Models",
+    "Toys & Games > Remote Control",
+    "Toys & Games > Outdoor",
+    "Sports & Outdoors > Fitness",
+    "Sports & Outdoors > Yoga",
+    "Sports & Outdoors > Camping",
+    "Sports & Outdoors > Cycling",
+    "Pet Supplies > Dogs",
+    "Pet Supplies > Cats",
+    "Pet Supplies > Grooming",
+    "Tools > Power Tools",
+    "Tools > Hand Tools",
+    "Tools > Measuring",
+    "Automotive > Accessories",
+    "Automotive > Electronics",
+    "Baby > Feeding",
+    "Baby > Diapering",
+    "Baby > Gear",
+    "Baby > Nursery",
+    "Office > Stationery",
+    "Office > Equipment",
+    "Grocery > Snacks",
+    "Grocery > Condiments",
+    "Books > Fiction",
+    "Books > Non-Fiction",
+    "Books > Children"
+]
+
 # ============ 侧边栏 ============
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/amazon.png", width=50)
@@ -88,11 +230,10 @@ with st.sidebar:
     
     st.divider()
     
-    # ===== AI 配置模块（默认 DeepSeek，支持 st.secrets） =====
+    # AI 配置模块
     st.markdown("### 🤖 AI 智能分析")
-    st.caption("启用AI可获得更精准的语义聚类和评论洞察")
+    st.caption("启用AI可获得更精准的数据清洗、聚类和洞察")
     
-    # 从 st.secrets 读取默认配置
     default_api_key = ""
     default_base_url = "https://api.deepseek.com/v1"
     default_model = "deepseek-chat"
@@ -133,18 +274,17 @@ with st.sidebar:
         st.session_state.api_key = api_key
         st.session_state.model = model_choice
         st.session_state.base_url = base_url
-        st.success("✅ DeepSeek AI 已启用")
+        st.success("✅ AI 已启用（DeepSeek）")
     else:
         st.session_state.ai_enabled = False
-        st.info("💡 未启用AI，使用本地词库")
+        st.info("💡 未启用AI，使用本地逻辑")
     
     st.divider()
     st.caption(f"📅 版本: v3.0 | {datetime.now().strftime('%Y-%m-%d')}")
-    st.caption("💡 所有数据仅在本地处理，API调用仅用于分析")
 
 # ============ 主界面 ============
 st.markdown('<p class="main-header">🚀 ABA利基分析工具 v3.0</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">全手动 · 可选AI · 6维度选品报告</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">全手动 · AI增强 · 6维度选品报告</p>', unsafe_allow_html=True)
 
 # ============================================================
 # STEP 1: 项目设置
@@ -152,146 +292,6 @@ st.markdown('<p class="sub-header">全手动 · 可选AI · 6维度选品报告<
 if st.session_state.step == 1:
     st.markdown("### ⚙️ Step 1: 项目设置")
     
-    # 全英文四级类目列表
-    CATEGORIES_EN = [
-        "请选择类目",
-        "Electronics > Headphones > Over-Ear > Noise Cancelling",
-        "Electronics > Headphones > Over-Ear > Wireless",
-        "Electronics > Headphones > In-Ear > True Wireless",
-        "Electronics > Headphones > In-Ear > Noise Cancelling",
-        "Electronics > Headphones > Sports > Wireless Sports",
-        "Electronics > Speakers > Bluetooth > Portable Bluetooth",
-        "Electronics > Speakers > Bluetooth > Waterproof Bluetooth",
-        "Electronics > Smartwatches > Sports > GPS Sports Watch",
-        "Electronics > Smartwatches > Sports > Heart Rate Monitor",
-        "Electronics > Projectors > Home > 4K Home Projector",
-        "Electronics > Projectors > Portable > Mini Portable Projector",
-        "Electronics > Cameras > Digital > DSLR Cameras",
-        "Electronics > Cameras > Digital > Mirrorless Cameras",
-        "Electronics > Drones > Consumer > Professional Drones",
-        "Electronics > Smart Home > Security > Smart Cameras",
-        "Electronics > TVs > 4K > OLED TVs",
-        "Electronics > TVs > 4K > QLED TVs",
-        "Computers > Laptops > Gaming > Gaming Laptops",
-        "Computers > Laptops > Business > Business Laptops",
-        "Computers > Laptops > Chromebooks > Google Chromebooks",
-        "Computers > Monitors > Gaming > High Refresh Rate Monitors",
-        "Computers > Monitors > Office > 4K Office Monitors",
-        "Computers > Keyboards > Mechanical > Wired Mechanical",
-        "Computers > Keyboards > Mechanical > Wireless Mechanical",
-        "Computers > Mice > Gaming > Wired Gaming Mice",
-        "Computers > Mice > Gaming > Wireless Gaming Mice",
-        "Computers > Storage > SSD > External SSD",
-        "Computers > Storage > SSD > Internal SSD",
-        "Computers > Printers > Laser > Black & White Laser",
-        "Computers > Printers > Inkjet > Color Inkjet",
-        "Computers > Networking > Routers > WiFi 6 Routers",
-        "Cell Phones > Smartphones > Android > Samsung Galaxy",
-        "Cell Phones > Smartphones > Android > Google Pixel",
-        "Cell Phones > Smartphones > iPhone > iPhone Series",
-        "Cell Phones > Cases > iPhone > Shockproof Cases",
-        "Cell Phones > Cases > iPhone > Magnetic Cases",
-        "Cell Phones > Screen Protectors > Tempered Glass > iPhone Tempered Glass",
-        "Cell Phones > Chargers > Wall > Fast Chargers",
-        "Cell Phones > Chargers > Wall > Wireless Chargers",
-        "Cell Phones > Power Banks > High Capacity > Large Capacity Power Banks",
-        "Cell Phones > Power Banks > Portable > Compact Power Banks",
-        "Home & Kitchen > Furniture > Living Room > Sofas",
-        "Home & Kitchen > Furniture > Living Room > Coffee Tables",
-        "Home & Kitchen > Furniture > Bedroom > Bed Frames",
-        "Home & Kitchen > Furniture > Study > Desks",
-        "Home & Kitchen > Furniture > Dining > Dining Tables",
-        "Home & Kitchen > Furniture > Outdoor > Outdoor Tables & Chairs",
-        "Home & Kitchen > Bedding > Sheet Sets > Cotton Sheet Sets",
-        "Home & Kitchen > Bedding > Pillows > Memory Foam Pillows",
-        "Home & Kitchen > Lighting > Floor Lamps > Modern Floor Lamps",
-        "Home & Kitchen > Lighting > Table Lamps > Eye-Care Desk Lamps",
-        "Home & Kitchen > Storage > Shelves > Shelving Units",
-        "Home & Kitchen > Cookware > Pans > Non-Stick Pans",
-        "Home & Kitchen > Cookware > Knives > Chef Knife Sets",
-        "Home & Kitchen > Small Appliances > Coffee > Drip Coffee Makers",
-        "Home & Kitchen > Small Appliances > Coffee > Espresso Machines",
-        "Home & Kitchen > Small Appliances > Air Fryers > Air Fryers",
-        "Home & Kitchen > Small Appliances > Ovens > Countertop Ovens",
-        "Clothing > Men > Tops > T-Shirts",
-        "Clothing > Men > Tops > Polo Shirts",
-        "Clothing > Men > Outerwear > Jackets",
-        "Clothing > Men > Pants > Jeans",
-        "Clothing > Men > Pants > Shorts",
-        "Clothing > Women > Dresses > Casual Dresses",
-        "Clothing > Women > Tops > Blouses",
-        "Clothing > Women > Outerwear > Trench Coats",
-        "Clothing > Women > Pants > Jeans",
-        "Clothing > Women > Skirts > Midi Skirts",
-        "Clothing > Kids > Toddler > Toddler T-Shirts",
-        "Shoes > Men > Athletic > Running Shoes",
-        "Shoes > Men > Athletic > Basketball Shoes",
-        "Shoes > Men > Formal > Leather Shoes",
-        "Shoes > Men > Casual > Sneakers",
-        "Shoes > Women > Athletic > Running Shoes",
-        "Shoes > Women > Heels > Stiletto Heels",
-        "Shoes > Women > Flats > Ballet Flats",
-        "Shoes > Women > Boots > Ankle Boots",
-        "Shoes > Women > Sandals > Flat Sandals",
-        "Jewelry > Necklaces > Gold > Gold Necklaces",
-        "Jewelry > Necklaces > Silver > Silver Necklaces",
-        "Jewelry > Bracelets > Gold > Gold Bracelets",
-        "Jewelry > Earrings > Gold > Gold Earrings",
-        "Jewelry > Rings > Gold > Gold Rings",
-        "Beauty > Skincare > Face > Facial Cleansers",
-        "Beauty > Skincare > Face > Serums",
-        "Beauty > Skincare > Face > Moisturizers",
-        "Beauty > Skincare > Face > Sunscreens",
-        "Beauty > Makeup > Base > Foundations",
-        "Beauty > Makeup > Eyes > Eyeshadow Palettes",
-        "Beauty > Makeup > Lips > Lipsticks",
-        "Beauty > Fragrance > Women > Eau de Parfum",
-        "Beauty > Fragrance > Men > Eau de Cologne",
-        "Beauty > Hair Care > Shampoo > Shampoos",
-        "Beauty > Hair Care > Styling > Hair Straighteners",
-        "Toys & Games > Educational > Puzzles > Adult Puzzles",
-        "Toys & Games > Educational > Board Games > Family Board Games",
-        "Toys & Games > Plush > Stuffed Animals > Plush Toys",
-        "Toys & Games > Models > Figures > Action Figures",
-        "Toys & Games > Remote Control > Cars > RC Cars",
-        "Toys & Games > Outdoor > Bikes > Kids Bicycles",
-        "Sports & Outdoors > Fitness > Strength > Dumbbells",
-        "Sports & Outdoors > Fitness > Cardio > Treadmills",
-        "Sports & Outdoors > Fitness > Accessories > Yoga Mats",
-        "Sports & Outdoors > Fitness > Accessories > Resistance Bands",
-        "Sports & Outdoors > Yoga > Mats > Travel Yoga Mats",
-        "Sports & Outdoors > Camping > Tents > Backpacking Tents",
-        "Sports & Outdoors > Cycling > Bikes > Mountain Bikes",
-        "Sports & Outdoors > Cycling > Bikes > Road Bikes",
-        "Pet Supplies > Dogs > Food > Dry Dog Food",
-        "Pet Supplies > Dogs > Toys > Chew Toys",
-        "Pet Supplies > Cats > Food > Dry Cat Food",
-        "Pet Supplies > Cats > Litter > Clay Cat Litter",
-        "Pet Supplies > Cats > Furniture > Cat Trees",
-        "Tools > Power Tools > Drills > Impact Drills",
-        "Tools > Power Tools > Saws > Circular Saws",
-        "Tools > Hand Tools > Wrenches > Wrench Sets",
-        "Tools > Hand Tools > Screwdrivers > Screwdriver Sets",
-        "Tools > Measuring > Tape > Tape Measures",
-        "Automotive > Accessories > Mounts > Vent Mounts",
-        "Automotive > Accessories > Chargers > USB Car Chargers",
-        "Automotive > Electronics > Dash Cams > Dash Cameras",
-        "Baby > Feeding > Formula > Baby Formula",
-        "Baby > Diapering > Diapers > Disposable Diapers",
-        "Baby > Feeding > Bottles > Glass Baby Bottles",
-        "Baby > Gear > Strollers > Lightweight Strollers",
-        "Baby > Nursery > Cribs > Wooden Cribs",
-        "Office > Stationery > Pens > Gel Pens",
-        "Office > Stationery > Notebooks > Grid Notebooks",
-        "Office > Equipment > Projectors > Business Projectors",
-        "Office > Equipment > Shredders > Paper Shredders",
-        "Grocery > Snacks > Nuts > Mixed Nuts",
-        "Grocery > Snacks > Chocolate > Dark Chocolate",
-        "Books > Books > Fiction > Bestseller Fiction",
-        "Books > Books > Non-Fiction > Business Books",
-        "Books > Books > Children > Picture Books"
-    ]
-
     with st.container():
         col1, col2 = st.columns(2)
         with col1:
@@ -304,24 +304,16 @@ if st.session_state.step == 1:
                 st.session_state.project_name = project_name
         
         with col2:
-            search_term = st.text_input(
-                "🔍 搜索类目",
-                placeholder="输入关键词过滤类目（如：headphones, yoga）",
-                key="category_search"
-            )
-            if search_term:
-                filtered_categories = [cat for cat in CATEGORIES_EN if search_term.lower() in cat.lower()]
-                filtered_categories = filtered_categories or ["未找到匹配类目"]
-            else:
-                filtered_categories = CATEGORIES_EN
-            
             category = st.selectbox(
                 "📂 目标类目 *",
-                options=filtered_categories,
-                index=0
+                options=CATEGORIES_LEVEL2,
+                index=0,
+                key="category_select"
             )
-            if category != "请选择类目" and category != "未找到匹配类目":
+            if category != "请选择类目":
                 st.session_state.category = category
+            else:
+                st.session_state.category = ""
         
         date_range = st.date_input(
             "📅 数据时间范围",
@@ -338,14 +330,14 @@ if st.session_state.step == 1:
         if st.button("下一步 →", type="primary", use_container_width=True):
             if not st.session_state.project_name:
                 st.error("请填写项目名称")
-            elif not st.session_state.category or st.session_state.category in ["请选择类目", "未找到匹配类目"]:
+            elif not st.session_state.category:
                 st.error("请选择目标类目")
             else:
                 st.session_state.step = 2
                 st.rerun()
 
 # ============================================================
-# STEP 2: 上传ABA数据（含智能文件读取）
+# STEP 2: 上传ABA数据（AI 在数据导入第一时间介入）
 # ============================================================
 elif st.session_state.step == 2:
     st.markdown("### 📂 Step 2: 上传ABA原始数据")
@@ -354,8 +346,8 @@ elif st.session_state.step == 2:
     st.markdown("""
     <div style="background-color: #eaf2f8; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
     <b>📋 支持格式：</b> .csv, .xlsx, .xls<br>
-    • 自动识别中文/英文列名<br>
-    • 自动跳过元数据行<br>
+    • AI 自动识别列名并清洗数据<br>
+    • AI 自动发现卖点<br>
     • 建议导出最近一周的数据
     </div>
     """, unsafe_allow_html=True)
@@ -369,11 +361,10 @@ elif st.session_state.step == 2:
     if uploaded is not None:
         st.session_state.uploaded_files["aba"] = uploaded
         try:
-            # ===== 智能读取文件 =====
+            # ===== 1. 读取文件 =====
             file_bytes = uploaded.getvalue()
             file_extension = uploaded.name.split('.')[-1].lower()
             
-            # 检测第一行是否为元数据行（包含"报告范围"）
             skip_rows = 0
             try:
                 content = file_bytes.decode('utf-8', errors='ignore')
@@ -396,19 +387,33 @@ elif st.session_state.step == 2:
                 st.error(f"不支持的文件格式: {file_extension}")
                 st.stop()
             
-            st.success(f"✅ 已上传: {uploaded.name} ({len(df)} 行)")
+            st.success(f"✅ 文件读取成功: {uploaded.name} ({len(df)} 行)")
             
-            # ===== 立即执行初步分析 =====
-            from core.parser import parse_aba_csv
-            from core.clustering import semantic_clustering
+            # ===== 2. 🆕 AI 数据清洗（第一时间介入） =====
+            use_ai = st.session_state.ai_enabled
+            api_key = st.session_state.api_key if use_ai else None
+            model = st.session_state.model if use_ai else None
+            base_url = st.session_state.base_url if use_ai else None
             
-            with st.spinner("正在分析ABA数据..."):
-                use_ai = st.session_state.ai_enabled
-                api_key = st.session_state.api_key if use_ai else None
-                model = st.session_state.model if use_ai else None
-                base_url = st.session_state.base_url if use_ai else None
-                
+            if use_ai and api_key:
+                with st.spinner("🧠 AI 正在清洗数据..."):
+                    df = ai_data_cleaning(df, api_key, model, base_url)
+            
+            # ===== 3. 解析ABA =====
+            with st.spinner("正在解析ABA数据..."):
                 aba_result = parse_aba_csv(df)
+                
+                # ===== 4. 🆕 AI 卖点发现 =====
+                if use_ai and api_key and aba_result.get("non_brand_keywords"):
+                    with st.spinner("🧠 AI 正在发现卖点..."):
+                        keywords = [item.get("search_term", "") for item in aba_result["non_brand_keywords"][:50]]
+                        ai_modifiers = ai_discover_modifiers(keywords, api_key, model, base_url)
+                        # 合并 AI 发现的卖点到结果中
+                        if ai_modifiers.get("modifiers"):
+                            aba_result["ai_modifiers"] = ai_modifiers
+            
+            # ===== 5. 语义聚类 =====
+            with st.spinner("正在聚类分析..."):
                 clusters = semantic_clustering(
                     aba_result, 
                     st.session_state.category,
@@ -418,7 +423,7 @@ elif st.session_state.step == 2:
                     base_url=base_url
                 )
             
-            # 显示数据面板
+            # ===== 6. 数据面板 =====
             st.markdown("---")
             st.markdown("### 📊 Step 2 数据面板：调研候选清单")
             
@@ -433,7 +438,17 @@ elif st.session_state.step == 2:
                 avg_click = aba_result.get("avg_click_share", 0)
                 st.metric("📈 平均点击份额", f"{avg_click:.2f}%" if avg_click else "N/A")
             
-            # 需要调研的关键词
+            # AI 发现的新卖点
+            if use_ai and ai_modifiers:
+                with st.expander("🧠 AI 发现的新卖点", expanded=True):
+                    modifiers = ai_modifiers.get("modifiers", {})
+                    if modifiers:
+                        for category_name, keywords_list in modifiers.items():
+                            st.write(f"**{category_name}**: {', '.join(keywords_list[:5])}")
+                    else:
+                        st.info("未发现新卖点")
+            
+            # 关键词列表
             st.markdown("---")
             st.markdown("#### 🔍 需要调研的关键词（Top 30）")
             top_non_brand = aba_result.get("non_brand_keywords", [])[:30]
@@ -445,8 +460,7 @@ elif st.session_state.step == 2:
                         "关键词": item.get("search_term", ""),
                         "ABA排名": item.get("search_frequency_rank", "N/A"),
                         "点击份额(%)": item.get("click_share", ""),
-                        "转化份额(%)": item.get("conversion_share", ""),
-                        "建议导出": "✅ 是"
+                        "转化份额(%)": item.get("conversion_share", "")
                     })
                 st.dataframe(pd.DataFrame(keyword_data), use_container_width=True, hide_index=True)
                 
@@ -458,7 +472,7 @@ elif st.session_state.step == 2:
                     mime="text/plain"
                 )
             
-            # 需要调研的ASIN
+            # ASIN列表
             st.markdown("---")
             st.markdown("#### 📦 需要调研的 ASIN（Top 20）")
             top_asins = aba_result.get("top_asins", [])[:20]
@@ -468,8 +482,7 @@ elif st.session_state.step == 2:
                     asin_data.append({
                         "序号": i,
                         "ASIN": asin,
-                        "出现次数": count,
-                        "建议导出": "✅ 是"
+                        "出现次数": count
                     })
                 st.dataframe(pd.DataFrame(asin_data), use_container_width=True, hide_index=True)
                 
@@ -481,7 +494,7 @@ elif st.session_state.step == 2:
                     mime="text/plain"
                 )
             
-            # 高频修饰词/卖点
+            # 卖点
             st.markdown("---")
             st.markdown("#### 🏷️ 高频修饰词 / 卖点")
             top_mods = aba_result.get("top_modifiers", [])[:20]
@@ -489,7 +502,7 @@ elif st.session_state.step == 2:
                 mod_text = "、".join([f"**{word}** ({count}次)" for word, count in top_mods])
                 st.markdown(mod_text)
             
-            # 细分市场聚类
+            # 细分市场
             st.markdown("---")
             st.markdown("#### 📂 识别出的细分市场")
             if clusters:
