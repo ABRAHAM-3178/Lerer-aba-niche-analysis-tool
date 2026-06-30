@@ -84,28 +84,20 @@ def determine_quadrant(sales_change: float, price_change: float) -> tuple:
     
     if sales_up and price_up:
         return ("🟢 完全接受（蓝海）", "可进", "立即进入，撇脂定价，抢占核心关键词", "#27ae60")
-    
     elif sales_up and price_stable:
         return ("🟢 稳定增长（潜力市场）", "可进", "快速跟进，跟随定价，聚焦长尾词", "#2e86c1")
-    
     elif sales_up and price_down:
         return ("🟡 竞争加剧（微蓝海）", "谨慎", "差异化进入，成本领先或高附加值定位", "#f39c12")
-    
     elif sales_stable and price_up:
-        return ("🟡 品质溢价（小众高客单）", "可进", "差异化进入高端，极致体验，精准人群", "#f39c12")
-    
+        return ("🟡 品质溢价（小众高客单）", "可进", "差异化进入高端，极致体验", "#f39c12")
     elif sales_stable and price_stable:
         return ("🟠 成熟稳定（红海）", "不建议", "除非有颠覆性创新，否则不建议进入", "#e67e22")
-    
     elif sales_stable and price_down:
         return ("🟠 价格战（红海）", "不建议", "避免价格战陷阱，寻找差异化机会", "#e67e22")
-    
     elif sales_down and price_up:
         return ("🔴 虚高泡沫（不可持续）", "放弃", "不建议进入，等待泡沫破裂", "#e74c3c")
-    
     elif sales_down and price_stable:
         return ("🟠 衰退前兆（不建议）", "不建议", "寻找替代机会，不建议进入", "#e67e22")
-    
     elif sales_down and price_down:
         return ("🔴 快速衰退（放弃）", "放弃", "坚决不进入，市场正在萎缩", "#c0392b")
     
