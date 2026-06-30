@@ -69,9 +69,9 @@ if "ai_enabled" not in st.session_state:
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
 if "model" not in st.session_state:
-    st.session_state.model = "gpt-4o"
+    st.session_state.model = "deepseek-chat"
 if "base_url" not in st.session_state:
-    st.session_state.base_url = "https://api.openai.com/v1"
+    st.session_state.base_url = "https://api.deepseek.com/v1"
 
 # ============ 侧边栏 ============
 with st.sidebar:
@@ -88,36 +88,42 @@ with st.sidebar:
     
     st.divider()
     
-    # ===== AI 配置模块（支持 st.secrets + 手动输入） =====
+    # ===== AI 配置模块（默认 DeepSeek，支持 st.secrets） =====
     st.markdown("### 🤖 AI 智能分析")
     st.caption("启用AI可获得更精准的语义聚类和评论洞察")
     
-    # 🆕 从 st.secrets 读取默认 API Key（部署时自动注入）
+    # 从 st.secrets 读取默认配置
     default_api_key = ""
+    default_base_url = "https://api.deepseek.com/v1"
+    default_model = "deepseek-chat"
+    
     try:
         default_api_key = st.secrets.get("OPENAI_API_KEY", "")
+        default_base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
+        default_model = st.secrets.get("MODEL_NAME", "deepseek-chat")
     except Exception:
         pass
     
     api_key = st.text_input(
-        "API Key",
+        "DeepSeek API Key",
         type="password",
         value=default_api_key,
-        placeholder="输入 OpenAI / DeepSeek Key",
-        help="留空则使用本地词库（功能受限）。部署后可在 Secrets 中设置 OPENAI_API_KEY",
+        placeholder="输入 DeepSeek API Key（sk-...）",
+        help="获取：platform.deepseek.com",
         key="api_key_input"
     )
     
     model_choice = st.selectbox(
         "选择模型",
-        ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "deepseek-chat", "qwen-plus", "claude-3-5-sonnet"],
+        ["deepseek-chat", "deepseek-reasoner", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "qwen-plus"],
         index=0,
         key="model_choice"
     )
     
     base_url = st.text_input(
-        "API Base URL（可选）",
-        placeholder="默认 OpenAI",
+        "API Base URL",
+        value=default_base_url,
+        placeholder="https://api.deepseek.com/v1",
         help="DeepSeek 使用 https://api.deepseek.com/v1",
         key="base_url_input"
     )
@@ -126,8 +132,8 @@ with st.sidebar:
         st.session_state.ai_enabled = True
         st.session_state.api_key = api_key
         st.session_state.model = model_choice
-        st.session_state.base_url = base_url or "https://api.openai.com/v1"
-        st.success("✅ AI 已启用")
+        st.session_state.base_url = base_url
+        st.success("✅ DeepSeek AI 已启用")
     else:
         st.session_state.ai_enabled = False
         st.info("💡 未启用AI，使用本地词库")
