@@ -1,5 +1,5 @@
 """
-评论挖掘模块
+评论挖掘模块（支持AI分析）
 """
 
 from typing import Dict, Any, List
@@ -10,13 +10,13 @@ import re
 
 POSITIVE_WORDS = {
     '好', '棒', '赞', '喜欢', '满意', '推荐', '值得', '不错', '优秀',
-    ' amazing', 'great', 'good', 'excellent', 'perfect', 'best', 'love', 'like',
+    'amazing', 'great', 'good', 'excellent', 'perfect', 'best', 'love', 'like',
     'recommend', 'satisfied', 'happy', 'wonderful', 'awesome', 'fantastic'
 }
 
 NEGATIVE_WORDS = {
     '差', '坏', '烂', '失望', '遗憾', '后悔', '垃圾', '不行', '不好',
-    ' bad', 'poor', 'terrible', 'awful', 'horrible', 'disappointed', 'regret',
+    'bad', 'poor', 'terrible', 'awful', 'horrible', 'disappointed', 'regret',
     'waste', 'broken', 'defective', 'issue', 'problem'
 }
 
@@ -34,14 +34,49 @@ MODIFIER_KEYWORDS = {
 }
 
 
-def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None) -> List[Dict[str, Any]]:
-    """分析评论数据"""
+def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None,
+                     use_ai: bool = False, api_key: str = None,
+                     model: str = None, base_url: str = None) -> List[Dict[str, Any]]:
+    """分析评论数据（支持AI模式）"""
     
     if review_df is None or review_df.empty:
         return []
     
     results = []
     
+    # ===== AI 模式：对评论数 > 200 的 ASIN 进行深度分析 =====
+    if use_ai and api_key:
+        try:
+            from utils.ai_client import AIClient
+            from utils.prompts import build_comment_messages
+            
+            client = AIClient(api_key=api_key, model=model, base_url=base_url)
+            
+            for asin, group in review_df.groupby('asin'):
+                if len(group) < 200:
+                    continue
+                
+                texts = group['review_body'].astype(str).tolist()
+                comments_text = "\n".join(texts[:30])
+                messages = build_comment_messages([comments_text])
+                ai_result = client.chat_json(messages)
+                
+                results.append({
+                    'asin': asin,
+                    'review_count': len(group),
+                    'depth': '⭐⭐⭐ 深度分析 (AI)',
+                    'avg_rating': round(group['rating'].mean(), 2),
+                    'positive_ratio': round((group['rating'] >= 4).sum() / len(group) * 100, 1),
+                    'top_pains': ai_result.get('pains', [])[:5],
+                    'top_praises': ai_result.get('praises', [])[:5],
+                    'product_suggestions': ai_result.get('product_suggestions', []),
+                    'listing_suggestions': ai_result.get('listing_suggestions', [])
+                })
+            return results
+        except Exception as e:
+            print(f"⚠️ AI 评论分析失败，回退到本地逻辑: {e}")
+    
+    # ===== 本地逻辑（回退） =====
     for asin, group in review_df.groupby('asin'):
         if len(group) < 50:
             continue
@@ -77,9 +112,6 @@ def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None) -> L
                         modifier_mentions[modifier] += 1
                         break
         
-        all_words = re.findall(r'[a-zA-Z\u4e00-\u9fa5]{2,}', ' '.join(texts).lower())
-        word_counts = Counter(all_words)
-        
         negative_texts = [t for t, r in zip(texts, ratings) if r <= 3]
         if negative_texts:
             neg_words = re.findall(r'[a-zA-Z\u4e00-\u9fa5]{2,}', ' '.join(negative_texts).lower())
@@ -107,7 +139,8 @@ def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None) -> L
             'top_modifiers': dict(modifier_mentions.most_common(5)),
             'top_pains': top_pains[:5],
             'top_praises': top_praises[:5],
-            'suggestions': suggestions
+            'product_suggestions': suggestions.get('product', []),
+            'listing_suggestions': suggestions.get('listing', [])
         })
     
     return results
@@ -115,13 +148,7 @@ def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None) -> L
 
 def generate_suggestions(modifier_mentions: dict, pains: list, praises: list, total: int) -> dict:
     """生成优化建议"""
-    
-    suggestions = {
-        'product': [],
-        'listing': [],
-        'advertising': [],
-        'urgent': []
-    }
+    suggestions = {'product': [], 'listing': [], 'advertising': [], 'urgent': []}
     
     total_mentions = sum(modifier_mentions.values()) if modifier_mentions else 1
     for modifier, count in modifier_mentions.items():
@@ -134,8 +161,6 @@ def generate_suggestions(modifier_mentions: dict, pains: list, praises: list, to
     
     if pains:
         suggestions['advertising'].append(f"针对痛点'{pains[0]}'制作对比广告")
-    
-    if pains:
         suggestions['urgent'].append(f"重点关注: {', '.join(pains[:2])}")
     
     return suggestions
