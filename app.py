@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import datetime
 import io
 
-from core.parser import parse_aba_csv, merge_aba_results
+from core.parser import parse_aba_csv
 
 # ============ 页面配置 ============
 st.set_page_config(
@@ -86,6 +86,10 @@ if "aba_preview" not in st.session_state:
     st.session_state.aba_preview = None
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
+if "analysis_result" not in st.session_state:
+    st.session_state.analysis_result = None
+if "analysis_complete" not in st.session_state:
+    st.session_state.analysis_complete = False
 
 # ============ 字段图例 ============
 def show_data_legend():
@@ -193,6 +197,115 @@ CATEGORIES_LEVEL2 = [
     "Books > Children"
 ]
 
+# ============ 合并函数 ============
+def merge_aba_files(uploaded_files):
+    """
+    解析并合并多个ABA文件
+    """
+    all_keywords = []
+    all_asins = []
+    total_files = len(uploaded_files)
+    
+    for file in uploaded_files:
+        try:
+            file_bytes = file.getvalue()
+            file_extension = file.name.split('.')[-1].lower()
+            
+            skip_rows = 0
+            try:
+                content = file_bytes.decode('utf-8', errors='ignore')
+                first_line = content.splitlines()[0] if content.splitlines() else ""
+                if '报告范围' in first_line or '选择年份' in first_line:
+                    skip_rows = 1
+            except:
+                pass
+            
+            if file_extension == 'csv':
+                try:
+                    df = pd.read_csv(io.BytesIO(file_bytes), skiprows=skip_rows, encoding='utf-8')
+                except UnicodeDecodeError:
+                    df = pd.read_csv(io.BytesIO(file_bytes), skiprows=skip_rows, encoding='gbk')
+            elif file_extension in ['xlsx', 'xls']:
+                df = pd.read_excel(io.BytesIO(file_bytes), skiprows=skip_rows, engine='openpyxl')
+            else:
+                continue
+            
+            result = parse_aba_csv(df)
+            
+            if "error" in result:
+                st.warning(f"文件 {file.name} 解析失败: {result['error']}")
+                continue
+            
+            for kw in result.get("non_brand_keywords", []):
+                kw['source_file'] = file.name
+                all_keywords.append(kw)
+            
+            for asin, count in result.get("top_asins", []):
+                all_asins.append((asin, count))
+                
+        except Exception as e:
+            st.warning(f"处理文件 {file.name} 时出错: {e}")
+    
+    if not all_keywords:
+        return None, None, {}
+    
+    # 合并关键词
+    keyword_map = {}
+    for kw in all_keywords:
+        term = kw.get("search_term")
+        if not term:
+            continue
+        if term not in keyword_map:
+            keyword_map[term] = {
+                "search_term": term,
+                "search_frequency_rank": kw.get("search_frequency_rank"),
+                "click_share": kw.get("click_share"),
+                "conversion_share": kw.get("conversion_share"),
+                "asin_count": 0,
+                "source_files": []
+            }
+        else:
+            if kw.get("search_frequency_rank") is not None:
+                if (keyword_map[term]["search_frequency_rank"] is None or 
+                    kw["search_frequency_rank"] < keyword_map[term]["search_frequency_rank"]):
+                    keyword_map[term]["search_frequency_rank"] = kw["search_frequency_rank"]
+            if kw.get("click_share") is not None:
+                keyword_map[term]["click_share"] = ((keyword_map[term].get("click_share") or 0) + kw["click_share"]) / 2
+            if kw.get("conversion_share") is not None:
+                keyword_map[term]["conversion_share"] = ((keyword_map[term].get("conversion_share") or 0) + kw["conversion_share"]) / 2
+            if kw.get("source_file"):
+                keyword_map[term]["source_files"].append(kw["source_file"])
+    
+    merged_keywords = list(keyword_map.values())
+    merged_keywords.sort(key=lambda x: x["search_frequency_rank"] if x["search_frequency_rank"] is not None else 999999)
+    
+    # 统计关联ASIN数
+    for kw in merged_keywords:
+        asin_set = set()
+        for item in all_keywords:
+            if item.get("search_term") == kw["search_term"] and item.get("clickedAsin"):
+                asin_set.add(item["clickedAsin"])
+        kw["asin_count"] = len(asin_set)
+    
+    # 合并ASIN
+    asin_counter = {}
+    for asin, count in all_asins:
+        asin_counter[asin] = asin_counter.get(asin, 0) + count
+    sorted_asins = sorted(asin_counter.items(), key=lambda x: x[1], reverse=True)
+    
+    # 计算平均点击份额
+    click_shares = [kw.get("click_share") for kw in merged_keywords if kw.get("click_share") is not None]
+    avg_click = sum(click_shares) / len(click_shares) if click_shares else 0
+    
+    stats = {
+        "total_keywords": len(merged_keywords),
+        "total_asins": len(sorted_asins),
+        "avg_click_share": avg_click,
+        "avg_conversion_share": sum([kw.get("conversion_share") for kw in merged_keywords if kw.get("conversion_share") is not None]) / len(merged_keywords) if merged_keywords else 0
+    }
+    
+    return merged_keywords, sorted_asins, stats
+
 # ============ 侧边栏 ============
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/amazon.png", width=50)
@@ -264,7 +377,7 @@ if st.session_state.step == 1:
                 st.rerun()
 
 # ============================================================
-# STEP 2: 上传多个ABA文件
+# STEP 2: 上传ABA数据（多文件合并）
 # ============================================================
 elif st.session_state.step == 2:
     st.markdown("### 📂 Step 2: 上传ABA数据（可上传2~5个文件）")
@@ -298,11 +411,9 @@ elif st.session_state.step == 2:
         st.session_state.uploaded_files = uploaded_files
         st.success(f"✅ 已选择 {len(uploaded_files)} 个文件")
         
-        # 显示文件列表
         for f in uploaded_files:
             st.write(f"- {f.name} ({f.size//1024} KB)")
         
-        # 解析并合并
         with st.spinner("正在解析并合并数据..."):
             merged_keywords, merged_asins, stats = merge_aba_files(uploaded_files)
         
@@ -311,10 +422,8 @@ elif st.session_state.step == 2:
             st.session_state.merged_asins = merged_asins
             st.session_state.aba_preview = stats
             
-            # 显示字段图例
             show_data_legend()
             
-            # 统计信息
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("📝 总关键词数（合并去重）", len(merged_keywords))
@@ -382,7 +491,6 @@ elif st.session_state.step == 2:
                 mime="text/plain"
             )
             
-            # 平均点击份额评级
             avg_click = stats.get("avg_click_share", 0)
             if avg_click:
                 if avg_click < 5:
@@ -414,134 +522,156 @@ elif st.session_state.step == 2:
                 st.rerun()
 
 # ============================================================
-# STEP 3: 上传补充数据（与之前相同，略）
+# STEP 3: 上传补充数据
 # ============================================================
-# 此部分与之前相同，由于篇幅省略，但实际代码中需保留。
-
-# ============================================================
-# 合并函数
-# ============================================================
-def merge_aba_files(uploaded_files):
-    """
-    解析并合并多个ABA文件
-    """
-    all_keywords = []
-    all_asins = []
-    total_files = len(uploaded_files)
+elif st.session_state.step == 3:
+    st.markdown("### 📂 Step 3: 上传补充数据文件")
+    st.markdown("上传从卖家精灵、Sif等工具导出的补充数据")
     
-    for file in uploaded_files:
-        try:
-            # 读取文件
-            file_bytes = file.getvalue()
-            file_extension = file.name.split('.')[-1].lower()
-            
-            skip_rows = 0
-            try:
-                content = file_bytes.decode('utf-8', errors='ignore')
-                first_line = content.splitlines()[0] if content.splitlines() else ""
-                if '报告范围' in first_line or '选择年份' in first_line:
-                    skip_rows = 1
-            except:
-                pass
-            
-            if file_extension == 'csv':
-                try:
-                    df = pd.read_csv(io.BytesIO(file_bytes), skiprows=skip_rows, encoding='utf-8')
-                except UnicodeDecodeError:
-                    df = pd.read_csv(io.BytesIO(file_bytes), skiprows=skip_rows, encoding='gbk')
-            elif file_extension in ['xlsx', 'xls']:
-                df = pd.read_excel(io.BytesIO(file_bytes), skiprows=skip_rows, engine='openpyxl')
-            else:
-                continue
-            
-            # 解析
-            from core.parser import parse_aba_csv
-            result = parse_aba_csv(df)
-            
-            if "error" in result:
-                st.warning(f"文件 {file.name} 解析失败: {result['error']}")
-                continue
-            
-            # 收集关键词
-            for kw in result.get("non_brand_keywords", []):
-                kw['source_file'] = file.name
-                all_keywords.append(kw)
-            
-            # 收集ASIN
-            for asin, count in result.get("top_asins", []):
-                all_asins.append((asin, count))
-                
-        except Exception as e:
-            st.warning(f"处理文件 {file.name} 时出错: {e}")
+    st.info("""
+    **📌 文件说明：**
+    - ✅ **必填**：关键词数据表、ASIN数据表
+    - ⚠️ **条件必填**：评论数据表（当ASIN评论数>200时必须提供）
+    - ⬜ **可选**：Sif流量词表、趋势验证表
+    """)
     
-    if not all_keywords:
-        return None, None, {}
-    
-    # 合并关键词：去重，保留最小排名，聚合点击份额和转化份额（平均）
-    keyword_map = {}
-    for kw in all_keywords:
-        term = kw.get("search_term")
-        if not term:
-            continue
-        if term not in keyword_map:
-            keyword_map[term] = {
-                "search_term": term,
-                "search_frequency_rank": kw.get("search_frequency_rank"),
-                "click_share": kw.get("click_share"),
-                "conversion_share": kw.get("conversion_share"),
-                "asin_count": 0,
-                "source_files": []
-            }
-        else:
-            # 更新最小排名
-            if kw.get("search_frequency_rank") is not None:
-                if (keyword_map[term]["search_frequency_rank"] is None or 
-                    kw["search_frequency_rank"] < keyword_map[term]["search_frequency_rank"]):
-                    keyword_map[term]["search_frequency_rank"] = kw["search_frequency_rank"]
-            # 累加份额（平均）
-            if kw.get("click_share") is not None:
-                keyword_map[term]["click_share"] = ((keyword_map[term].get("click_share") or 0) + kw["click_share"]) / 2
-            if kw.get("conversion_share") is not None:
-                keyword_map[term]["conversion_share"] = ((keyword_map[term].get("conversion_share") or 0) + kw["conversion_share"]) / 2
-            # 记录源文件
-            if kw.get("source_file"):
-                keyword_map[term]["source_files"].append(kw["source_file"])
-    
-    # 转换为列表并排序
-    merged_keywords = list(keyword_map.values())
-    # 按排名升序
-    merged_keywords.sort(key=lambda x: x["search_frequency_rank"] if x["search_frequency_rank"] is not None else 999999)
-    
-    # 统计每个关键词关联的ASIN数量
-    for kw in merged_keywords:
-        # 统计所有文件中该关键词出现的ASIN数
-        asin_set = set()
-        for item in all_keywords:
-            if item.get("search_term") == kw["search_term"] and item.get("clickedAsin"):
-                asin_set.add(item["clickedAsin"])
-        kw["asin_count"] = len(asin_set)
-    
-    # 合并ASIN
-    asin_counter = {}
-    for asin, count in all_asins:
-        asin_counter[asin] = asin_counter.get(asin, 0) + count
-    sorted_asins = sorted(asin_counter.items(), key=lambda x: x[1], reverse=True)
-    
-    # 计算平均点击份额
-    click_shares = [kw.get("click_share") for kw in merged_keywords if kw.get("click_share") is not None]
-    avg_click = sum(click_shares) / len(click_shares) if click_shares else 0
-    
-    stats = {
-        "total_keywords": len(merged_keywords),
-        "total_asins": len(sorted_asins),
-        "avg_click_share": avg_click,
-        "avg_conversion_share": sum([kw.get("conversion_share") for kw in merged_keywords if kw.get("conversion_share") is not None]) / len(merged_keywords) if merged_keywords else 0
+    file_configs = {
+        "keyword": {"label": "📊 关键词数据表 *", "help": "卖家精灵导出的关键词深度数据", "required": True},
+        "asin": {"label": "📦 ASIN数据表 *", "help": "卖家精灵导出的ASIN详情数据", "required": True},
+        "review": {"label": "💬 评论数据表", "help": "评论数>200的ASIN需提供", "required": False},
+        "sif": {"label": "🔗 Sif流量词表", "help": "Sif反查流量词结果", "required": False},
+        "trend": {"label": "📈 趋势验证表", "help": "销量/价格变化数据", "required": False}
     }
     
-    return merged_keywords, sorted_asins, stats
+    cols = st.columns(2)
+    for idx, (key, config) in enumerate(file_configs.items()):
+        with cols[idx % 2]:
+            uploaded = st.file_uploader(
+                config["label"],
+                type=["csv", "xlsx", "xls"],
+                key=f"upload_{key}",
+                help=config["help"]
+            )
+            if uploaded is not None:
+                st.session_state.uploaded_files[key] = uploaded
+                try:
+                    ext = uploaded.name.split('.')[-1].lower()
+                    if ext == 'csv':
+                        try:
+                            df = pd.read_csv(uploaded, encoding='utf-8')
+                        except:
+                            uploaded.seek(0)
+                            df = pd.read_csv(uploaded, encoding='gbk')
+                    else:
+                        uploaded.seek(0)
+                        df = pd.read_excel(uploaded, engine='openpyxl')
+                    st.success(f"✅ 已上传: {uploaded.name} ({len(df)} 行)")
+                except Exception as e:
+                    st.error(f"❌ 读取失败: {e}")
+    
+    missing = []
+    if "keyword" not in st.session_state.uploaded_files:
+        missing.append("关键词数据表")
+    if "asin" not in st.session_state.uploaded_files:
+        missing.append("ASIN数据表")
+    
+    if missing:
+        st.warning(f"⚠️ 请上传: {', '.join(missing)}")
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("← 上一步"):
+            st.session_state.step = 2
+            st.rerun()
+    with col2:
+        if st.button("下一步 →", type="primary", use_container_width=True):
+            if "keyword" not in st.session_state.uploaded_files:
+                st.error("请上传关键词数据表")
+            elif "asin" not in st.session_state.uploaded_files:
+                st.error("请上传ASIN数据表")
+            else:
+                st.session_state.step = 4
+                st.rerun()
 
 # ============================================================
-# STEP 3、4、5 与之前相同，此处省略，但需保留原有逻辑
+# STEP 4: 预览校验
 # ============================================================
-# 注意：由于篇幅，此处仅展示 Step 2 的重构，完整 app.py 需包含其余步骤。
-# 实际使用时，请将上述内容与之前的 Step 3、4、5 合并。
+elif st.session_state.step == 4:
+    st.markdown("### 🔍 Step 4: 数据预览与校验")
+    
+    for key, file in st.session_state.uploaded_files.items():
+        if key in ["aba", "keyword", "asin", "review", "sif", "trend"]:
+            try:
+                ext = file.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(file)
+                else:
+                    df = pd.read_excel(file, engine='openpyxl')
+                st.markdown(f"✅ **{key}**: {file.name} ({len(df)} 行, {len(df.columns)} 列)")
+            except:
+                st.markdown(f"❌ **{key}**: 读取失败")
+    
+    st.divider()
+    st.markdown("#### 📋 数据完整性检查")
+    
+    validation_results = []
+    for key in ["keyword", "asin"]:
+        if key in st.session_state.uploaded_files:
+            file = st.session_state.uploaded_files[key]
+            try:
+                ext = file.name.split('.')[-1].lower()
+                if ext == 'csv':
+                    df = pd.read_csv(file)
+                else:
+                    df = pd.read_excel(file, engine='openpyxl')
+                validation_results.append(f"✅ {key}: {len(df)}行数据")
+            except:
+                validation_results.append(f"❌ {key}: 读取失败")
+    
+    for msg in validation_results:
+        st.write(msg)
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("← 上一步"):
+            st.session_state.step = 3
+            st.rerun()
+    with col2:
+        if st.button("🚀 开始分析", type="primary", use_container_width=True):
+            with st.spinner("正在分析中..."):
+                try:
+                    # 读取所有上传的文件
+                    data = {}
+                    for key, file in st.session_state.uploaded_files.items():
+                        if file is not None:
+                            ext = file.name.split('.')[-1].lower()
+                            if ext == 'csv':
+                                try:
+                                    data[key] = pd.read_csv(file, encoding='utf-8')
+                                except:
+                                    file.seek(0)
+                                    data[key] = pd.read_csv(file, encoding='gbk')
+                            else:
+                                file.seek(0)
+                                data[key] = pd.read_excel(file, engine='openpyxl')
+                    
+                    # 解析ABA（如果有多文件，用合并后的数据）
+                    if st.session_state.merged_keywords is not None:
+                        # 使用合并后的数据（已经包含top_asins等）
+                        aba_result = {
+                            "non_brand_keywords": st.session_state.merged_keywords,
+                            "top_asins": st.session_state.merged_asins,
+                            "total_keywords": len(st.session_state.merged_keywords),
+                            "avg_click_share": st.session_state.aba_preview.get("avg_click_share", 0)
+                        }
+                    else:
+                        aba_result = parse_aba_csv(data.get("aba"))
+                    
+                    # 执行完整的10维评分等（这里简化，只做演示）
+                    # 实际项目应导入其他模块
+                    st.success("分析完成（演示）")
+                    
+                except Exception as e:
+                    st.error(f"❌ 分析失败: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
