@@ -13,9 +13,6 @@ CATEGORY_KEYWORDS = {
     "工具": ["drill", "saw", "hammer", "screwdriver", "wrench", "level", "measure", "knife", "flashlight", "pliers", "socket"],
     "宠物": ["food", "toy", "leash", "collar", "bed", "bowl", "litter", "treat", "chew", "brush", "shampoo", "carrier", "crate"],
     "汽车": ["charger", "mat", "cover", "cleaner", "polish", "holder", "mount", "tool", "organizer", "light", "wiper"],
-    "食品": ["snack", "candy", "chocolate", "cookie", "chip", "nut", "tea", "coffee", "spice", "oil", "sauce", "seasoning"],
-    "图书": ["book", "guide", "manual", "workbook", "journal", "planner", "notebook", "dictionary", "encyclopedia", "textbook"],
-    "玩具": ["lego", "doll", "action", "figure", "board", "game", "puzzle", "car", "train", "block", "stuffed", "plush"],
 }
 
 GENERIC_BASE_WORDS = {
@@ -91,17 +88,9 @@ MODIFIER_CATEGORIES = {
     "时尚": ["stylish", "fashion", "trendy", "时尚", "潮流", "时髦"],
     "高端": ["luxury", "premium", "high end", "高端", "奢华", "尊贵"],
     "精致": ["delicate", "exquisite", "refined", "精致", "精美", "细腻"],
-    "透明": ["transparent", "clear", "see through", "透明", "磨砂", "渐变"],
     "金属": ["metal", "metallic", "stainless", "金属", "合金", "钢"],
     "木质": ["wood", "wooden", "bamboo", "木质", "竹制", "实木"],
     "皮质": ["leather", "genuine", "faux", "皮质", "真皮", "pu皮"],
-    "不锈钢": ["stainless steel", "steel", "不锈钢", "钢制"],
-    "碳纤维": ["carbon fiber", "carbon", "碳纤维", "碳素"],
-    "硅胶": ["silicone", "silica", "硅胶", "硅橡胶"],
-    "玻璃": ["glass", "tempered", "钢化玻璃", "玻璃", "强化"],
-    "真皮": ["genuine leather", "real leather", "真皮", "头层皮"],
-    "棉": ["cotton", "pure cotton", "棉", "纯棉", "全棉"],
-    "丝": ["silk", "satin", "丝", "丝绸", "缎面"],
     "户外": ["outdoor", "camping", "hiking", "户外", "露营", "徒步", "登山"],
     "旅行": ["travel", "luggage", "journey", "旅行", "出行", "旅途"],
     "办公": ["office", "work", "business", "办公", "商务", "职业"],
