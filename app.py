@@ -722,7 +722,8 @@ elif st.session_state.step == 3:
                     )
                 
                 if df is not None:
-                    st.session_state.uploaded_files[key] = uploaded
+                    # ✅ 只存储文件名，不存储文件对象（避免 TypeError）
+                    st.session_state.uploaded_files[key] = uploaded.name
                     st.success(f"✅ 已上传并映射成功: {uploaded.name} ({len(df)} 行)")
                     
                     # 存储映射后的 DataFrame
@@ -762,7 +763,6 @@ elif st.session_state.step == 3:
             else:
                 st.session_state.step = 4
                 st.rerun()
-
 # ============================================================
 # STEP 4: 预览校验
 # ============================================================
@@ -770,18 +770,14 @@ elif st.session_state.step == 4:
     st.markdown("### 🔍 Step 4: 数据预览与校验")
     
     # 显示所有已上传文件的摘要
-    for key, file in st.session_state.uploaded_files.items():
-        try:
-            # 尝试从 mapped_dfs 读取
-            if "mapped_dfs" in st.session_state and key in st.session_state.mapped_dfs:
-                df = st.session_state.mapped_dfs[key]
-                st.markdown(f"✅ **{key}**: {file.name} ({len(df)} 行, {len(df.columns)} 列)")
-                with st.expander(f"📊 {key} 数据预览"):
-                    st.dataframe(df.head(5), use_container_width=True)
-            else:
-                st.markdown(f"✅ **{key}**: {file.name}")
-        except:
-            st.markdown(f"❌ **{key}**: 读取失败")
+    for key, file_name in st.session_state.uploaded_files.items():
+        if "mapped_dfs" in st.session_state and key in st.session_state.mapped_dfs:
+            df = st.session_state.mapped_dfs[key]
+            st.markdown(f"✅ **{key}**: {file_name} ({len(df)} 行, {len(df.columns)} 列)")
+            with st.expander(f"📊 {key} 数据预览"):
+                st.dataframe(df.head(5), use_container_width=True)
+        else:
+            st.markdown(f"❌ **{key}**: 数据未找到")
     
     st.divider()
     st.markdown("#### 📋 数据完整性检查")
@@ -796,8 +792,9 @@ elif st.session_state.step == 4:
                 st.warning(f"⚠️ 关键词数据表缺少字段: {missing}")
             else:
                 st.success("✅ 关键词数据表：完整")
+        else:
+            st.warning("⚠️ 关键词数据表未加载")
     
-    # 检查 ASIN 数据表
     if "asin" in st.session_state.uploaded_files:
         if "mapped_dfs" in st.session_state and "asin" in st.session_state.mapped_dfs:
             df = st.session_state.mapped_dfs["asin"]
@@ -807,6 +804,8 @@ elif st.session_state.step == 4:
                 st.warning(f"⚠️ ASIN数据表缺少字段: {missing}")
             else:
                 st.success("✅ ASIN数据表：完整")
+        else:
+            st.warning("⚠️ ASIN数据表未加载")
     
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -817,7 +816,7 @@ elif st.session_state.step == 4:
         if st.button("🚀 开始分析", type="primary", use_container_width=True):
             with st.spinner("正在分析中..."):
                 try:
-                    # 读取所有上传的文件
+                    # 读取所有映射后的 DataFrame
                     data = {}
                     if "mapped_dfs" in st.session_state:
                         for key in ["keyword", "asin", "review", "sif", "trend"]:
@@ -841,10 +840,15 @@ elif st.session_state.step == 4:
                     try:
                         from core.clustering import semantic_clustering
                         clusters = semantic_clustering(aba_result, st.session_state.category, use_ai, api_key, model, base_url)
-                    except:
+                        st.success(f"✅ 聚类完成，发现 {len(clusters)} 个细分市场")
+                    except Exception as e:
+                        st.warning(f"⚠️ 聚类模块未加载: {e}")
                         clusters = []
                     
-                    st.success("✅ 分析完成！")
+                    # 这里可以继续调用评分和报告生成模块
+                    # 例如：scored_markets = calculate_10d_scores(...)
+                    
+                    st.success("✅ 初步分析完成！")
                     st.balloons()
                     st.session_state.step = 5
                     st.rerun()
@@ -852,7 +856,6 @@ elif st.session_state.step == 4:
                     st.error(f"❌ 分析失败: {e}")
                     import traceback
                     st.code(traceback.format_exc())
-
 # ============================================================
 # STEP 5
 # ============================================================
