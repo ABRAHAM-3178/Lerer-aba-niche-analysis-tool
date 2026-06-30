@@ -102,3 +102,48 @@ def build_summary_messages(data: dict) -> list:
             top_brands="、".join([])
         )}
     ]
+  
+DATA_CLEANING_PROMPT = """
+你是一个数据分析专家，擅长清洗亚马逊ABA数据。
+
+## 当前数据信息
+列名: {columns}
+样本数据: {sample_data}
+
+## 任务
+1. 识别每一列的实际含义（搜索词、排名、品牌、ASIN、点击份额、转化份额等）
+2. 输出列名映射关系（原始列名 → 标准列名）
+3. 识别异常值并给出处理建议
+
+## 输出格式（必须 JSON）
+{{
+  "column_mapping": {{
+    "原始列名1": "search_term",
+    "原始列名2": "search_frequency_rank"
+  }},
+  "data_cleaning": {{
+    "列名1": "strip",
+    "列名2": "convert_float"
+  }},
+  "summary": "清洗摘要"
+}}
+"""
+
+MODIFIER_DISCOVERY_PROMPT = """
+你是一个产品卖点分析专家。
+
+## 关键词列表
+{keywords}
+
+## 任务
+分析这些关键词，找出其中的核心卖点/功能，将相似的关键词归类。
+
+## 输出格式（必须 JSON）
+{{
+  "modifiers": {{
+    "卖点名称1": ["关键词1", "关键词2"],
+    "卖点名称2": ["关键词3", "关键词4"]
+  }},
+  "summary": "发现摘要"
+}}
+"""
