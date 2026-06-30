@@ -46,6 +46,31 @@ st.markdown("""
     .badge-d { background-color: #e74c3c; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
     .stApp { background-color: #f8f9fa; }
     .block-container { padding-top: 2rem; }
+    .data-legend {
+        background-color: #f0f3f5;
+        padding: 0.8rem 1.2rem;
+        border-radius: 8px;
+        margin: 0.5rem 0;
+        border-left: 4px solid #1a5276;
+    }
+    .data-legend table {
+        width: 100%;
+        font-size: 0.9rem;
+    }
+    .data-legend td {
+        padding: 0.2rem 0.8rem 0.2rem 0;
+    }
+    .data-legend .field-name {
+        font-weight: 600;
+        color: #1a5276;
+    }
+    .data-legend .field-desc {
+        color: #2c3e50;
+    }
+    .data-legend .field-meaning {
+        color: #7f8c8d;
+        font-size: 0.85rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -73,16 +98,15 @@ if "model" not in st.session_state:
 if "base_url" not in st.session_state:
     st.session_state.base_url = "https://api.deepseek.com/v1"
 
-# ============ AI 数据清洗函数 ============
+# ============ AI 数据清洗函数（增强版） ============
 def ai_data_cleaning(df: pd.DataFrame, api_key: str, model: str, base_url: str) -> pd.DataFrame:
-    """使用 AI 智能识别列名并清洗数据"""
+    """使用 AI 智能识别列名并清洗数据（增强列名匹配逻辑）"""
     try:
         from utils.ai_client import AIClient
         from utils.prompts import DATA_CLEANING_PROMPT
         
         client = AIClient(api_key=api_key, model=model, base_url=base_url)
         
-        # 获取列名和样本数据
         columns = df.columns.tolist()
         sample_data = df.head(5).to_dict('records')
         
@@ -96,21 +120,21 @@ def ai_data_cleaning(df: pd.DataFrame, api_key: str, model: str, base_url: str) 
         
         result = client.chat_json(messages)
         
-        # 根据AI建议重命名列
+        # 列名映射
         column_mapping = result.get("column_mapping", {})
         if column_mapping:
             df = df.rename(columns=column_mapping)
+            st.info(f"🧠 AI 列名映射: {column_mapping}")
         
-        # 处理异常值
+        # 数据清洗
         for col, action in result.get("data_cleaning", {}).items():
-            if action == "drop_na":
+            if action == "drop_na" and col in df.columns:
                 df = df.dropna(subset=[col])
-            elif action == "strip":
+            elif action == "strip" and col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
             elif action == "convert_float" and col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        st.success(f"🧠 AI 数据清洗完成: {result.get('summary', '已处理')}")
         return df
         
     except Exception as e:
@@ -134,12 +158,43 @@ def ai_discover_modifiers(keywords: list, api_key: str, model: str, base_url: st
         ]
         
         result = client.chat_json(messages)
-        st.info(f"🧠 AI 发现 {len(result.get('modifiers', {}))} 个卖点分类")
         return result
         
     except Exception as e:
         st.warning(f"⚠️ AI 卖点发现失败: {e}")
         return {}
+
+
+# ============ 显示字段图例 ============
+def show_data_legend():
+    """显示数据字段说明图例"""
+    st.markdown("""
+    <div class="data-legend">
+        <b>📖 字段说明</b>
+        <table>
+            <tr>
+                <td><span class="field-name">🔴 ABA排名</span></td>
+                <td><span class="field-desc">搜索频率排名，数字越小搜索量越大</span></td>
+                <td><span class="field-meaning">≤ 10,000 = 高流量词 | ≤ 50,000 = 中流量词</span></td>
+            </tr>
+            <tr>
+                <td><span class="field-name">📈 点击份额(%)</span></td>
+                <td><span class="field-desc">Top1 ASIN 在该搜索词下获得的点击占比</span></td>
+                <td><span class="field-meaning">越高 → 头部垄断越强 → 进入难度越大</span></td>
+            </tr>
+            <tr>
+                <td><span class="field-name">🔄 转化份额(%)</span></td>
+                <td><span class="field-desc">Top1 ASIN 在该搜索词下获得的订单占比</span></td>
+                <td><span class="field-meaning">越高 → 头部变现能力越强 → 竞争越激烈</span></td>
+            </tr>
+            <tr>
+                <td><span class="field-name">📦 关联ASIN数</span></td>
+                <td><span class="field-desc">该关键词下出现的不同 ASIN 数量</span></td>
+                <td><span class="field-meaning">越多 → 市场越分散 → 蓝海机会越大</span></td>
+            </tr>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ============ 二级类目列表 ============
@@ -230,7 +285,6 @@ with st.sidebar:
     
     st.divider()
     
-    # AI 配置模块
     st.markdown("### 🤖 AI 智能分析")
     st.caption("启用AI可获得更精准的数据清洗、聚类和洞察")
     
@@ -250,7 +304,6 @@ with st.sidebar:
         type="password",
         value=default_api_key,
         placeholder="输入 DeepSeek API Key（sk-...）",
-        help="获取：platform.deepseek.com",
         key="api_key_input"
     )
     
@@ -265,7 +318,6 @@ with st.sidebar:
         "API Base URL",
         value=default_base_url,
         placeholder="https://api.deepseek.com/v1",
-        help="DeepSeek 使用 https://api.deepseek.com/v1",
         key="base_url_input"
     )
     
@@ -337,7 +389,7 @@ if st.session_state.step == 1:
                 st.rerun()
 
 # ============================================================
-# STEP 2: 上传ABA数据（AI 在数据导入第一时间介入）
+# STEP 2: 上传ABA数据
 # ============================================================
 elif st.session_state.step == 2:
     st.markdown("### 📂 Step 2: 上传ABA原始数据")
@@ -361,7 +413,7 @@ elif st.session_state.step == 2:
     if uploaded is not None:
         st.session_state.uploaded_files["aba"] = uploaded
         try:
-            # ===== 1. 读取文件 =====
+            # 读取文件
             file_bytes = uploaded.getvalue()
             file_extension = uploaded.name.split('.')[-1].lower()
             
@@ -389,7 +441,7 @@ elif st.session_state.step == 2:
             
             st.success(f"✅ 文件读取成功: {uploaded.name} ({len(df)} 行)")
             
-            # ===== 2. 🆕 AI 数据清洗（第一时间介入） =====
+            # AI 数据清洗
             use_ai = st.session_state.ai_enabled
             api_key = st.session_state.api_key if use_ai else None
             model = st.session_state.model if use_ai else None
@@ -398,21 +450,22 @@ elif st.session_state.step == 2:
             if use_ai and api_key:
                 with st.spinner("🧠 AI 正在清洗数据..."):
                     df = ai_data_cleaning(df, api_key, model, base_url)
+            else:
+                st.info("💡 AI 未启用，使用本地解析逻辑")
             
-            # ===== 3. 解析ABA =====
+            # 解析ABA
             with st.spinner("正在解析ABA数据..."):
                 aba_result = parse_aba_csv(df)
-                
-                # ===== 4. 🆕 AI 卖点发现 =====
-                if use_ai and api_key and aba_result.get("non_brand_keywords"):
-                    with st.spinner("🧠 AI 正在发现卖点..."):
-                        keywords = [item.get("search_term", "") for item in aba_result["non_brand_keywords"][:50]]
-                        ai_modifiers = ai_discover_modifiers(keywords, api_key, model, base_url)
-                        # 合并 AI 发现的卖点到结果中
-                        if ai_modifiers.get("modifiers"):
-                            aba_result["ai_modifiers"] = ai_modifiers
             
-            # ===== 5. 语义聚类 =====
+            # AI 卖点发现
+            if use_ai and api_key and aba_result.get("non_brand_keywords"):
+                with st.spinner("🧠 AI 正在发现卖点..."):
+                    keywords = [item.get("search_term", "") for item in aba_result["non_brand_keywords"][:50]]
+                    ai_modifiers = ai_discover_modifiers(keywords, api_key, model, base_url)
+                    if ai_modifiers.get("modifiers"):
+                        aba_result["ai_modifiers"] = ai_modifiers
+            
+            # 语义聚类
             with st.spinner("正在聚类分析..."):
                 clusters = semantic_clustering(
                     aba_result, 
@@ -423,9 +476,12 @@ elif st.session_state.step == 2:
                     base_url=base_url
                 )
             
-            # ===== 6. 数据面板 =====
+            # 数据面板
             st.markdown("---")
             st.markdown("### 📊 Step 2 数据面板：调研候选清单")
+            
+            # 显示字段说明图例
+            show_data_legend()
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -438,33 +494,50 @@ elif st.session_state.step == 2:
                 avg_click = aba_result.get("avg_click_share", 0)
                 st.metric("📈 平均点击份额", f"{avg_click:.2f}%" if avg_click else "N/A")
             
-            # AI 发现的新卖点
+            # AI 卖点发现
             if use_ai and ai_modifiers:
-                with st.expander("🧠 AI 发现的新卖点", expanded=True):
+                with st.expander("🧠 AI 发现的新卖点", expanded=False):
                     modifiers = ai_modifiers.get("modifiers", {})
                     if modifiers:
                         for category_name, keywords_list in modifiers.items():
                             st.write(f"**{category_name}**: {', '.join(keywords_list[:5])}")
-                    else:
-                        st.info("未发现新卖点")
             
-            # 关键词列表
+            # ===== 关键词列表（含排名权重） =====
             st.markdown("---")
-            st.markdown("#### 🔍 需要调研的关键词（Top 30）")
+            st.markdown("#### 🔍 需要调研的关键词（按ABA排名排序）")
+            st.caption("💡 ABA排名 ≤ 10,000 为高流量词，建议优先调研")
+            
             top_non_brand = aba_result.get("non_brand_keywords", [])[:30]
+            
             if top_non_brand:
+                # 按 ABA 排名排序（去掉 None 值）
+                valid_keywords = [k for k in top_non_brand if k.get('search_frequency_rank') is not None]
+                sorted_keywords = sorted(valid_keywords, key=lambda x: x.get('search_frequency_rank', 999999))
+                
+                # 显示关键词列表
                 keyword_data = []
-                for i, item in enumerate(top_non_brand, 1):
+                for i, item in enumerate(sorted_keywords, 1):
+                    rank = item.get("search_frequency_rank")
+                    # 权重等级
+                    if rank and rank <= 10000:
+                        weight_tag = "🔴 高权重"
+                    elif rank and rank <= 50000:
+                        weight_tag = "🟡 中权重"
+                    else:
+                        weight_tag = "🟢 低权重"
+                    
                     keyword_data.append({
                         "序号": i,
                         "关键词": item.get("search_term", ""),
-                        "ABA排名": item.get("search_frequency_rank", "N/A"),
+                        "ABA排名": rank if rank else "N/A",
+                        "权重": weight_tag,
                         "点击份额(%)": item.get("click_share", ""),
                         "转化份额(%)": item.get("conversion_share", "")
                     })
+                
                 st.dataframe(pd.DataFrame(keyword_data), use_container_width=True, hide_index=True)
                 
-                keyword_list = "\n".join([item.get("search_term", "") for item in top_non_brand[:20]])
+                keyword_list = "\n".join([item.get("search_term", "") for item in sorted_keywords[:20]])
                 st.download_button(
                     label="📋 复制关键词列表 (Top 20)",
                     data=keyword_list,
@@ -474,7 +547,8 @@ elif st.session_state.step == 2:
             
             # ASIN列表
             st.markdown("---")
-            st.markdown("#### 📦 需要调研的 ASIN（Top 20）")
+            st.markdown("#### 📦 需要调研的 ASIN（按出现频次排序）")
+            
             top_asins = aba_result.get("top_asins", [])[:20]
             if top_asins:
                 asin_data = []
