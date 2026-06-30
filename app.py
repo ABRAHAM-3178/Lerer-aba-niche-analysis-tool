@@ -15,7 +15,7 @@ from core.trend import trend_verification
 from core.comment_analysis import analyze_comments
 from core.report_generator import generate_excel_report
 
-# 页面配置
+# ============ 页面配置 ============
 st.set_page_config(
     page_title="ABA利基分析工具 v3.0",
     page_icon="🚀",
@@ -44,6 +44,8 @@ st.markdown("""
     .badge-b { background-color: #f39c12; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
     .badge-c { background-color: #e67e22; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
     .badge-d { background-color: #e74c3c; color: white; padding: 0.2rem 0.8rem; border-radius: 12px; font-weight: 700; }
+    .stApp { background-color: #f8f9fa; }
+    .block-container { padding-top: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,15 +88,23 @@ with st.sidebar:
     
     st.divider()
     
-    # ===== 🆕 AI 配置模块 =====
+    # ===== AI 配置模块（支持 st.secrets + 手动输入） =====
     st.markdown("### 🤖 AI 智能分析")
     st.caption("启用AI可获得更精准的语义聚类和评论洞察")
+    
+    # 🆕 从 st.secrets 读取默认 API Key（部署时自动注入）
+    default_api_key = ""
+    try:
+        default_api_key = st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        pass
     
     api_key = st.text_input(
         "API Key",
         type="password",
+        value=default_api_key,
         placeholder="输入 OpenAI / DeepSeek Key",
-        help="留空则使用本地词库（功能受限）",
+        help="留空则使用本地词库（功能受限）。部署后可在 Secrets 中设置 OPENAI_API_KEY",
         key="api_key_input"
     )
     
@@ -368,7 +378,6 @@ elif st.session_state.step == 2:
                 pass
             
             if file_extension == 'csv':
-                # 尝试多种编码
                 try:
                     df = pd.read_csv(uploaded, skiprows=skip_rows, encoding='utf-8')
                 except UnicodeDecodeError:
@@ -388,7 +397,6 @@ elif st.session_state.step == 2:
             from core.clustering import semantic_clustering
             
             with st.spinner("正在分析ABA数据..."):
-                # 获取AI配置
                 use_ai = st.session_state.ai_enabled
                 api_key = st.session_state.api_key if use_ai else None
                 model = st.session_state.model if use_ai else None
@@ -549,7 +557,6 @@ elif st.session_state.step == 3:
             if uploaded is not None:
                 st.session_state.uploaded_files[key] = uploaded
                 try:
-                    # 智能读取
                     ext = uploaded.name.split('.')[-1].lower()
                     if ext == 'csv':
                         try:
