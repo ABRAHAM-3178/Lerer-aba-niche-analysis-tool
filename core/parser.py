@@ -1,11 +1,11 @@
 """
-ABA CSV 解析器（支持中文多列格式）
+ABA CSV 解析器（支持中文多列格式 + 全类目词库）
 """
 
 import pandas as pd
 import re
 from collections import Counter
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Set
 
 from utils.constants import (
     CATEGORY_KEYWORDS,
@@ -17,6 +17,9 @@ from utils.constants import (
 )
 
 
+# ============================================================
+# 列名检测
+# ============================================================
 def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     """自动检测列名映射（支持中英文）"""
     cols = df.columns.tolist()
@@ -78,6 +81,9 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
     return mapping
 
 
+# ============================================================
+# 类目自动识别
+# ============================================================
 def detect_category(keywords: List[str], titles: List[str]) -> str:
     """自动检测类目"""
     all_text = " ".join(keywords + titles).lower()
@@ -94,7 +100,10 @@ def detect_category(keywords: List[str], titles: List[str]) -> str:
     return "未识别"
 
 
-def is_brand_keyword(term: str) -> tuple:
+# ============================================================
+# 品牌词识别
+# ============================================================
+def is_brand_keyword(term: str) -> Tuple[bool, Optional[str]]:
     """判断是否为品牌词"""
     term_lower = term.lower().strip()
     for brand in BRAND_SUFFIXES:
@@ -106,21 +115,70 @@ def is_brand_keyword(term: str) -> tuple:
     return False, None
 
 
-def extract_modifiers(term: str, category_base_words: set = None) -> List[str]:
-    """提取修饰词"""
+# ============================================================
+# 修饰词提取（核心函数）
+# ============================================================
+def extract_modifiers(term: str, category_base_words: Optional[Set[str]] = None) -> List[str]:
+    """
+    提取修饰词（去除基础产品词和停用词）
+    
+    Args:
+        term: 搜索词
+        category_base_words: 当前类目的基础产品词集合（可选）
+    
+    Returns:
+        修饰词列表
+    """
+    import re
+    from utils.constants import STOP_WORDS, GENERIC_BASE_WORDS
+    
     term_lower = term.lower()
     base_words = category_base_words or set()
     all_base_words = base_words | GENERIC_BASE_WORDS
+    
+    # 去除基础产品词（支持单数和复数）
     for word in all_base_words:
         term_lower = re.sub(rf'\b{word}\b', '', term_lower)
         term_lower = re.sub(rf'\b{word}s\b', '', term_lower)
+    
+    # 提取单词
     words = re.findall(r'[a-z]+', term_lower)
+    
+    # 过滤停用词和短词
     modifiers = [w for w in words if w not in STOP_WORDS and len(w) > 2]
     return modifiers
 
 
+def get_modifier_category(modifier: str) -> str:
+    """
+    将修饰词归类到卖点类别
+    
+    Args:
+        modifier: 修饰词
+    
+    Returns:
+        卖点类别名称，如果没有匹配则返回 "其他"
+    """
+    from utils.constants import MODIFIER_CATEGORIES
+    
+    modifier_lower = modifier.lower()
+    for category, keywords in MODIFIER_CATEGORIES.items():
+        for kw in keywords:
+            if kw in modifier_lower:
+                return category
+    return "其他"
+
+
+# ============================================================
+# 中文多列格式转换
+# ============================================================
 def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
-    """解析中文多列ASIN格式的ABA文件"""
+    """
+    解析中文多列 ASIN 格式的 ABA 文件，转换为标准格式
+    
+    输入：包含 "搜索词"、"搜索频率排名" 及 3 个 ASIN 排名的数据
+    输出：标准 ABA 格式（每行一个 ASIN 排名）
+    """
     import pandas as pd
     
     # 清理列名
@@ -128,7 +186,7 @@ def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
     
     print("🔍 实际列名:", df.columns.tolist())
     
-    def find_column(patterns: list) -> str:
+    def find_column(patterns: List[str]) -> Optional[str]:
         for col in df.columns:
             col_clean = col.strip()
             for pattern in patterns:
@@ -136,6 +194,7 @@ def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
                     return col
         return None
     
+    # 搜索词和排名
     search_term_col = find_column(['搜索词'])
     search_rank_col = find_column(['搜索频率排名', '频率排名'])
     
@@ -163,6 +222,7 @@ def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
     click_3_col = find_column(['点击量第三的商品', '点击份额', '第3名点击份额'])
     conv_3_col = find_column(['点击量第3的商品', '转化贡献占比', '第3名转化份额'])
     
+    # 检查必要列
     if not search_term_col:
         raise ValueError("未找到 '搜索词' 列，请确认文件格式")
     if not search_rank_col:
@@ -241,14 +301,24 @@ def parse_chinese_multi_asin_file(df: pd.DataFrame) -> pd.DataFrame:
             })
     
     if not rows:
-        raise ValueError("未能从文件中提取任何有效ASIN数据")
+        raise ValueError("未能从文件中提取任何有效 ASIN 数据")
     
     return pd.DataFrame(rows)
 
 
+# ============================================================
+# 主解析函数
+# ============================================================
 def parse_aba_csv(df: pd.DataFrame) -> Dict[str, Any]:
-    """解析ABA数据，支持标准格式和中文多列格式"""
+    """
+    解析 ABA 数据，支持标准格式和中文多列格式
     
+    Args:
+        df: pandas DataFrame，来自用户上传的文件
+    
+    Returns:
+        包含解析结果的字典
+    """
     if df is None:
         return {"error": "未提供ABA数据"}
     
@@ -327,7 +397,7 @@ def parse_aba_csv(df: pd.DataFrame) -> Dict[str, Any]:
     
     modifier_counts = Counter(all_modifiers)
     
-    # Top品牌
+    # Top 品牌
     top_brands = Counter()
     for item in brand_keywords:
         if item.get('brand'):
