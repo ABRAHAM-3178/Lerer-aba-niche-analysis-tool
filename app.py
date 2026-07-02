@@ -17,10 +17,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.column_mapper import AIColumnMapper
 from core.attribute_normalizer import AttributeNormalizer
 from core.market_filter import MarketFilter
-from core.comment_analysis import CommentAnalyzer, PainPoint
+from core.comment_analysis import CommentAnalyzer
 from core.trend import TrendAnalyzer
 from core.report_generator import ReportGenerator
-from utils.ai_client import create_deepseek_client, AIClient
+from utils.ai_client import create_deepseek_client
 
 # ==================== 页面配置 ====================
 st.set_page_config(
@@ -48,7 +48,6 @@ if "analysis_complete" not in st.session_state:
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/000000/idea.png", width=60)
     st.title("🔍 ABA利基分析")
     st.caption("v5.0 · 产品开发决策引擎")
     
@@ -103,7 +102,9 @@ st.markdown("*从数据到产品定义 —— AI 全程介入，输出可落地�
 
 # 检查AI连接状态
 if st.session_state.ai_client is None:
-    st.warning("⚠️ 请先在左侧侧边栏配置 DeepSeek API Key")
+    st.info("💡 建议在左侧侧边栏配置 DeepSeek API Key 以获得 AI 增强功能")
+else:
+    st.success("✅ AI 已就绪")
 
 st.divider()
 
@@ -177,7 +178,6 @@ if sales_file is not None:
                 attr_summary = normalizer.get_attribute_summary(df_processed)
                 st.session_state.df_processed = df_processed
                 
-                # 显示属性统计
                 attr_count = len([k for k, v in attr_summary.items() if v["unique_count"] > 0])
                 status.update(label=f"✅ 识别到 {attr_count} 个属性维度", state="complete")
             else:
@@ -246,7 +246,7 @@ if sales_file is not None:
             st.metric(
                 label=f"{status_icon} {indicator.name}",
                 value=indicator.message,
-                delta="达标" if indicator.passed else f"需 ≥ {indicator.threshold}" if "≥" in indicator.message else f"需 ≤ {indicator.threshold}"
+                delta="达标" if indicator.passed else f"需调整"
             )
         
         if not result.passed:
@@ -326,7 +326,6 @@ if sales_file is not None:
                     st.stop()
             
             if pain_points:
-                # 显示痛点列表
                 pain_data = []
                 for pp in pain_points[:10]:
                     pain_data.append({
@@ -349,7 +348,6 @@ if sales_file is not None:
                                 )
                                 pp.suggested_solution = "; ".join(solutions) if solutions else None
                     
-                    # 显示带建议的痛点
                     st.write("#### 💡 AI 改良建议")
                     for pp in pain_points[:5]:
                         if pp.suggested_solution:
@@ -361,13 +359,11 @@ if sales_file is not None:
         st.write("### 📈 趋势分析")
         st.caption("需要上传包含多个月份/季度历史数据的文件才能进行趋势分析")
         
-        # 检查是否有时间序列数据
         date_cols = [c for c in df_processed.columns if c.startswith("202") or c.startswith("20")]
         if date_cols:
             with st.status("📊 分析趋势...", expanded=True) as status:
                 try:
                     analyzer = TrendAnalyzer()
-                    # 将数据转换为长格式
                     df_melted = df_processed.melt(
                         id_vars=[c for c in df_processed.columns if c not in date_cols],
                         value_vars=date_cols,
@@ -375,7 +371,6 @@ if sales_file is not None:
                         value_name="sales"
                     )
                     
-                    # 如果有属性列，按属性分组分析
                     if "attr_尺寸_标准" in df_processed.columns:
                         result = analyzer.analyze_sales_trend(
                             df_melted, "date", "sales", "attr_尺寸_标准"
@@ -409,12 +404,10 @@ if sales_file is not None:
             st.subheader("📄 产品定义报告")
             
             with st.spinner("AI 正在生成报告..."):
-                # 准备数据
                 price_gap_analysis = {
                     "avg_price": df_processed["price"].mean() if "price" in df_processed.columns else 0
                 }
                 
-                # 属性机会
                 attribute_opportunities = {}
                 if "attr_尺寸_标准" in df_processed.columns:
                     sizes = df_processed["attr_尺寸_标准"].dropna().value_counts()
@@ -431,7 +424,6 @@ if sales_file is not None:
                             "top_values": colors.index[:3].tolist()
                         }
                 
-                # 生成报告
                 report_gen = ReportGenerator(st.session_state.ai_client)
                 definition = report_gen.generate_product_definition_report(
                     class_name="该类目",
@@ -441,11 +433,9 @@ if sales_file is not None:
                     trend_analysis={}
                 )
                 
-                # 显示HTML报告
                 html_report = report_gen.format_report_html(definition, {})
                 st.markdown(html_report, unsafe_allow_html=True)
 
 # ==================== 页脚 ====================
 st.divider()
 st.caption("🔍 ABA利基分析工具 v5.0 | 产品开发决策引擎 | 数据驱动 · AI赋能")
-st.caption("📌 如有问题，请检查：1) 数据文件格式 2) API Key 配置 3) config.yaml 是否存在")
