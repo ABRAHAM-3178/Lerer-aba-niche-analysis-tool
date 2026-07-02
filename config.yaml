@@ -1,43 +1,36 @@
-# config.yaml - 所有阈值集中管理，用户可在界面中调节
+# ABA利基分析工具 v5.0 配置文件
 
 market_filter:
-  min_monthly_sales: 30000      # Top 100月销量总和
-  min_avg_price: 20.0           # 美元
-  max_avg_review_count: 500     # Top 10平均评论数
-  max_brand_concentration: 0.60 # Top 10品牌市占率
-
-attribute_scoring:
-  demand_growth_weight: 0.4
-  supply_share_weight: 0.2
-  barrier_health_weight: 0.3
-  price_stability_weight: 0.1
+  min_monthly_sales: 30000
+  min_avg_price: 20.0
+  max_avg_review_count: 500
+  max_brand_concentration: 0.60
 
 trend:
-  growth_threshold: 0.15        # 连续2季度增长>15%为红利期
-  decline_threshold: -0.05      # 连续2季度下滑为衰退期
-  stable_threshold: 0.05        # 波动<5%为常青款
+  growth_threshold: 0.15
+  decline_threshold: -0.05
+  stable_threshold: 0.05
 
 review_mining:
-  min_mentions: 3               # 痛点的最小提及次数
-  sample_size_warning: 100      # 评论少于100条时发出警告
+  min_mentions: 3
+  sample_size_warning: 100
 
 column_mapping:
-  similarity_threshold: 0.8     # 列名匹配相似度阈值
-  confirm_threshold: 0.5        # 低于此值需用户确认
+  similarity_threshold: 0.8
+  confirm_threshold: 0.5
 
 color_mapping:
-  # 颜色标准化映射表（可无限扩展）
-  - regex: "(?i)\\b(black|pure black|carbon fiber black|black top)\\b"
+  - regex: "(?i)\\b(black|pure black|carbon fiber black|black top|black\\s*frame)\\b"
     standard: "黑色"
-  - regex: "(?i)\\b(white|pure white|soft white|white top)\\b"
+  - regex: "(?i)\\b(white|pure white|soft white|white top|white\\s*frame)\\b"
     standard: "白色"
-  - regex: "(?i)\\b(light walnut|light walnut top|walnut.*white|natural)\\b"
+  - regex: "(?i)\\b(light walnut|light walnut top|walnut.*white|natural|natural oak)\\b"
     standard: "浅胡桃色"
-  - regex: "(?i)\\b(dark walnut|black walnut|walnut.*black|black walnut)\\b"
+  - regex: "(?i)\\b(dark walnut|black walnut|walnut.*black|walnut)\\b"
     standard: "深胡桃色"
   - regex: "(?i)\\b(rustic brown|vintage brown|brown|rustic)\\b"
     standard: "棕色"
-  - regex: "(?i)\\b(oak|natural oak|oak top)\\b"
+  - regex: "(?i)\\b(oak|oak top)\\b"
     standard: "橡木色"
   - regex: "(?i)\\b(\\d{2})\\s*(?:x\\s*\\d{2})?\\s*(?:-inch|inch|in|\\\"|寸)"
-    standard: "{matched}寸"  # 提取数字后拼接
+    standard: "{matched}寸"
