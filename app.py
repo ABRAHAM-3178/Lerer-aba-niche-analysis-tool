@@ -1,6 +1,7 @@
 """
 ABA利基分析工具 v5.0 - 完整版
 产品开发决策引擎：从数据到产品定义，AI全程介入
+核心特性：AI驱动的智能数据清洗（列名映射、属性提取、数据标准化）
 """
 
 import streamlit as st
@@ -8,19 +9,19 @@ import pandas as pd
 import yaml
 import os
 import sys
+import json
+import re
 from datetime import datetime
+from typing import Dict, List, Optional, Any
 
 # 将项目根目录加入路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 导入核心模块
-from core.column_mapper import AIColumnMapper
-from core.attribute_normalizer import AttributeNormalizer
+from utils.ai_client import create_deepseek_client, AIClient
 from core.market_filter import MarketFilter
-from core.comment_analysis import CommentAnalyzer
 from core.trend import TrendAnalyzer
 from core.report_generator import ReportGenerator
-from utils.ai_client import create_deepseek_client
 
 # ==================== 页面配置 ====================
 st.set_page_config(
@@ -35,22 +36,22 @@ if "ai_client" not in st.session_state:
     st.session_state.ai_client = None
 if "df_processed" not in st.session_state:
     st.session_state.df_processed = None
-if "mapping_result" not in st.session_state:
-    st.session_state.mapping_result = None
+if "cleaning_report" not in st.session_state:
+    st.session_state.cleaning_report = None
 if "pain_points" not in st.session_state:
     st.session_state.pain_points = []
-if "analysis_complete" not in st.session_state:
-    st.session_state.analysis_complete = False
+if "step" not in st.session_state:
+    st.session_state.step = "upload"  # upload | cleaning | mapping | analyzing | done
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.title("🔍 ABA利基分析")
-    st.caption("v5.0 · 产品开发决策引擎")
+    st.caption("v5.0 · AI驱动的数据清洗与分析")
     
     st.divider()
     
     # AI配置
-    with st.expander("🤖 AI 配置", expanded=False):
+    with st.expander("🤖 AI 配置", expanded=True):
         api_key = st.text_input(
             "DeepSeek API Key",
             type="password",
@@ -67,6 +68,12 @@ with st.sidebar:
             else:
                 st.warning("请输入 API Key")
     
+    # 显示连接状态
+    if st.session_state.ai_client:
+        st.success("AI 就绪")
+    else:
+        st.warning("请配置 API Key")
+    
     st.divider()
     
     # 模式选择
@@ -78,131 +85,238 @@ with st.sidebar:
     
     st.divider()
     
-    # 高级阈值调节
     with st.expander("🎛️ 高级阈值", expanded=False):
-        st.caption("调节市场过滤器标准（路线二核心工具）")
         min_sales = st.number_input("月销量门槛", value=30000, step=5000)
         min_price = st.number_input("客单价门槛 ($)", value=20.0, step=5.0)
         max_reviews = st.number_input("评论壁垒上限", value=500, step=50)
         brand_concentration = st.slider("品牌垄断度上限", 0.1, 1.0, 0.6, 0.05)
     
     st.divider()
-    st.caption("💡 数据来源：卖家精灵 / Jungle Scout / Helium 10")
+    st.caption("💡 AI 自动识别：列名映射、属性提取、数据标准化")
+
+
+# ==================== AI 智能清洗函数 ====================
+
+def ai_detect_columns(ai_client: AIClient, df: pd.DataFrame) -> Dict[str, str]:
+    """使用AI识别每一列的含义，返回列名映射"""
+    
+    # 取前3行和列名作为样本
+    sample_data = df.head(3).to_dict(orient='records')
+    column_names = df.columns.tolist()
+    
+    prompt = f"""
+    你是一位数据清洗专家。请分析以下表格数据，识别每一列的含义。
+
+    列名列表：{column_names}
+
+    数据样例（前3行）：
+    {json.dumps(sample_data, ensure_ascii=False, indent=2)[:3000]}
+
+    请识别每一列的含义，映射到以下标准字段之一：
+    - asin: 商品唯一标识（10位字母数字组合，通常以B0开头）
+    - parent_asin: 父体ASIN
+    - title: 商品标题/名称
+    - price: 售价（数字，可能带$符号）
+    - monthly_sales: 月销量（数字）
+    - monthly_revenue: 月销售额（数字）
+    - review_count: 评论数（数字）
+    - rating: 平均评分（1-5之间的数字）
+    - bsr_rank: Best Seller排名
+    - category: 类目名称
+    - review_date: 评论日期
+    - review_star: 评论星级（1-5）
+    - review_body: 评论正文
+    - review_title: 评论标题
+    - verified_purchase: 是否验证购买
+    - keyword: 关键词
+    - search_volume: 搜索量
+    - unknown: 无法识别
+
+    请返回JSON格式：
+    {{
+        "mapping": {{
+            "原始列名1": "标准字段名1",
+            "原始列名2": "标准字段名2"
+        }},
+        "notes": "任何观察说明"
+    }}
+    """
+
+    try:
+        response = ai_client.chat_json(prompt, temperature=0.1)
+        mapping = response.get("mapping", {})
+        return mapping
+    except Exception as e:
+        st.error(f"AI列名识别失败: {e}")
+        return {}
+
+
+def ai_extract_attributes(ai_client: AIClient, titles: List[str]) -> Dict[str, Dict]:
+    """使用AI从标题中批量提取属性（尺寸、颜色、材质等）"""
+    
+    # 取前50个标题，避免Token超限
+    sample_titles = titles[:50]
+    
+    prompt = f"""
+    你是一位数据标注专家。请从以下商品标题中提取关键属性。
+
+    商品标题列表（共{len(sample_titles)}个）：
+    {json.dumps(sample_titles, ensure_ascii=False, indent=2)[:4000]}
+
+    请为每个标题提取以下属性（如果有）：
+    1. 尺寸（如：48寸、55寸、63寸、Large、XL等）
+    2. 颜色（如：黑色、白色、棕色、浅胡桃色等）
+    3. 材质（如：木材、金属、玻璃、塑料等）
+    4. 款式/类型（如：L形、U形、升降、电竞等）
+
+    同时，请对颜色进行标准化：
+    - Black / Pure Black / Carbon Fiber Black → 黑色
+    - White / Pure White / Soft White → 白色
+    - Light Walnut / Walnut / Natural → 浅胡桃色
+    - Dark Walnut / Black Walnut → 深胡桃色
+    - Rustic Brown / Vintage Brown / Brown → 棕色
+    - Oak / Natural Oak → 橡木色
+
+    请返回JSON格式：
+    {{
+        "results": [
+            {{
+                "title": "原标题",
+                "尺寸": "提取的值",
+                "颜色": "标准化后的颜色",
+                "材质": "提取的材质",
+                "款式": "提取的款式"
+            }}
+        ],
+        "color_standardization_notes": "颜色标准化的说明"
+    }}
+    """
+
+    try:
+        response = ai_client.chat_json(prompt, temperature=0.2)
+        results = response.get("results", [])
+        return results
+    except Exception as e:
+        st.error(f"AI属性提取失败: {e}")
+        return []
+
+
+def ai_detect_data_type(ai_client: AIClient, df: pd.DataFrame) -> Dict:
+    """使用AI判断数据是路线一（单类目深度）还是路线二（多类目广度）"""
+    
+    sample = df.head(10).to_dict(orient='records')
+    
+    prompt = f"""
+    你是一位数据分析专家。请判断以下数据属于哪种类型：
+
+    数据样例（前10行）：
+    {json.dumps(sample, ensure_ascii=False, indent=2)[:3000]}
+
+    请判断：
+    1. 这是「单类目深度数据」还是「多类目广度数据」？
+       - 单类目深度：所有商品属于同一个细分类目（如都是升降桌），数据量大（50-100行）
+       - 多类目广度：商品来自多个不同类目（如宠物用品、办公家具、电子产品混合），数据量小（10-30行）
+
+    2. 如果是单类目深度数据，识别出该类目名称
+    3. 如果是多类目广度数据，列出涉及的类目列表
+
+    返回JSON格式：
+    {{
+        "data_type": "single_category" 或 "multi_category",
+        "category_name": "类目名称（如果是单类目）",
+        "categories": ["类目1", "类目2"]（如果是多类目）,
+        "confidence": 0.0-1.0,
+        "reasoning": "判断理由"
+    }}
+    """
+
+    try:
+        response = ai_client.chat_json(prompt, temperature=0.2)
+        return response
+    except Exception as e:
+        st.error(f"AI数据类型判断失败: {e}")
+        return {"data_type": "unknown"}
+
+
+def ai_normalize_values(ai_client: AIClient, df: pd.DataFrame, column: str) -> Dict:
+    """使用AI标准化某一列的值（如颜色标准化）"""
+    
+    unique_values = df[column].dropna().unique().tolist()
+    
+    prompt = f"""
+    你是一位数据标准化专家。请对以下{column}列的值进行标准化。
+
+    原始值列表：
+    {json.dumps(unique_values, ensure_ascii=False, indent=2)[:2000]}
+
+    请将相似的值合并为标准值。
+    例如：["Black", "Pure Black", "Carbon Fiber Black", "Black Top"] → 全部标准化为 "黑色"
+          ["Light Walnut", "Walnut", "Natural"] → "浅胡桃色"
+          ["48 inch", "48in", "48 x 24"] → "48寸"
+
+    返回JSON格式：
+    {{
+        "mapping": {{
+            "原始值1": "标准化值1",
+            "原始值2": "标准化值2"
+        }},
+        "notes": "标准化的说明"
+    }}
+    """
+
+    try:
+        response = ai_client.chat_json(prompt, temperature=0.1)
+        return response.get("mapping", {})
+    except Exception as e:
+        st.error(f"AI标准化失败: {e}")
+        return {}
+
 
 # ==================== 主界面 ====================
 st.title("🔍 ABA利基分析工具 v5.0")
-st.markdown("*从数据到产品定义 —— AI 全程介入，输出可落地的开发指令*")
+st.markdown("*AI 驱动的智能数据清洗 —— 上传任何格式的数据，AI 自动识别、提取、标准化*")
 
 if st.session_state.ai_client is None:
-    st.info("💡 建议在左侧侧边栏配置 DeepSeek API Key")
+    st.warning("⚠️ 请先在左侧侧边栏配置 DeepSeek API Key")
 else:
-    st.success("✅ AI 已就绪")
+    st.success("✅ AI 已就绪，可以开始数据清洗")
 
 st.divider()
 
-# ==================== 数据获取指南（完整版） ====================
+# ==================== 数据获取指南 ====================
 with st.expander("📖 数据获取指南（必读）- 点击展开", expanded=False):
     st.markdown("""
-    ### 🎯 你需要准备什么数据？
-    
-    根据你选择的路线，需要不同的数据：
-    
-    ---
-    
-    ## 📊 路线一：我有明确方向
-    
-    **你需要：** 目标类目的 Top 100 竞品数据（深度分析用）
-    
-    **推荐工具：卖家精灵 (SellerSprite)**
-    
-    **下载步骤：**
-    1. 登录卖家精灵 → 「工具」→「查竞品」
-    2. 输入目标类目关键词（如：standing desk）
-    3. 点击「导出」→「导出当前列表」
-    4. 确保包含字段：ASIN、Title、Price、Monthly Sales、Reviews
-    
-    **备选工具：** Jungle Scout、Helium 10（路径类似）
-    
-    ---
-    
-    ## 📊 路线二：探索蓝海类目
-    
-    **你需要：** 多个类目的 Top 10 汇总数据（广度扫描用）
-    
-    **方式一：卖家精灵导出多类目数据**
-    1. 登录卖家精灵 → 「工具」→「选品精灵」→「类目挖掘」
-    2. 查看各大类目下的Top商品数据
-    3. 导出多个类目的汇总数据（含ASIN、价格、销量、评论数）
-    4. 或者分别导出3-5个候选类目的Top 10数据合并成一个文件
-    
-    **方式二：使用类目列表（快速测试）**
-    1. 从亚马逊BSR页面获取感兴趣的类目名称列表
-    2. 手动整理成Excel，参考下面格式
-    
-    **方式三：BSR榜单扫描**
-    1. 打开亚马逊 Best Sellers 页面
-    2. 记录5-10个感兴趣的一级/二级类目
-    3. 分别进入每个类目，复制Top 10的ASIN
-    4. 用卖家精灵批量查询这些ASIN的数据
-    
-    ---
-    
-    ### ✅ 数据格式要求
-    
-    | 要求 | 说明 |
-    |:---|:---|
-    | 文件格式 | `.csv` 或 `.xlsx` |
-    | 必要字段 | ASIN、Title、Price、Monthly Sales、Review Count |
-    
-    ### 💬 评论数据（可选，两条路线都需要）
-    
-    从卖家精灵点击ASIN → 评论分析 → 导出评论
-    包含：Review Star、Review Body
-    
-    ---
-    
-    ### 🚀 快速决策：我需要走哪条路线？
-    
-    | 你的状态 | 推荐路线 | 需要的数据 |
+    ### 🎯 AI 能帮你做什么？
+
+    上传任意来源的数据表格，AI 会自动：
+    1. **识别每一列的含义**（不管列名是什么语言）
+    2. **从标题中提取属性**（尺寸、颜色、材质、款式）
+    3. **标准化数据值**（"Light Walnut" → "浅胡桃色"）
+    4. **判断数据类型**（单类目深度 vs 多类目广度）
+
+    ### 📊 支持的数据来源
+
+    | 工具 | 导出路径 | 说明 |
     |:---|:---|:---|
-    | 我知道要卖什么类目 | 路线一 | 该类目Top 100数据 |
-    | 我完全不知道卖什么 | 路线二 | 5-10个类目的Top 10汇总数据 |
-    | 我有几个候选类目在犹豫 | 路线二 | 这些候选类目的Top 10汇总数据 |
-    
-    ---
-    
-    ### 📋 卖家精灵导出字段清单（必须勾选）
-    
-    | 字段名 | 说明 | 是否必须 |
-    |:---|:---|:---:|
-    | ASIN | 商品唯一标识 | ✅ 必须 |
-    | Title / 商品标题 | 完整标题 | ✅ 必须 |
-    | Price / 价格 | 当前售价 | ✅ 必须 |
-    | Monthly Sales / 月销量 | 近30天销量 | ✅ 必须 |
-    | Reviews / 评论数 | 总评论数 | ✅ 必须 |
-    | Rating / 评分 | 平均星级 | ⭐ 强烈推荐 |
-    | Parent ASIN | 父体ASIN | ⭐ 推荐 |
-    | Category / 类目 | 所在类目 | ⭐ 推荐 |
-    
-    ### 📅 历史趋势数据（进阶分析）
-    
-    如需分析销量趋势和市场生命周期，在卖家精灵详情页：
-    1. 找到「销量趋势」图表
-    2. 切换为「近12个月」
-    3. 点击「导出数据」
-    4. 确保包含：年月、销量
-    
-    ### ❓ 常见问题
-    
-    **Q: 没有卖家精灵账号怎么办？**
-    A: 可使用 Jungle Scout 或 Helium 10 替代导出，字段要求相同。
-    
-    **Q: 导出的列名和工具要求的不一样？**
-    A: 工具内置了 AI 智能列名映射，会自动识别不同工具的列名。
-    
-    **Q: 一定要上传评论数据吗？**
-    A: 不是必须的，但强烈推荐。差评痛点是产品差异化的核心来源。
-    
+    | 卖家精灵 | 工具 → 查竞品 → 导出 | 最推荐 |
+    | Jungle Scout | Extension → Export | 需要插件 |
+    | Helium 10 | Tools → Black Box → Export | 需订阅 |
+    | Amazon BSR | 手动复制 | 备选方案 |
+
+    ### ✅ 必要字段
+
+    确保数据包含这些列（列名不限，AI自动识别）：
+    - 商品标题（用于属性提取）
+    - 价格
+    - 月销量
+    - 评论数
+    - ASIN（强烈推荐）
+
+    ### 💬 评论数据（可选）
+
+    如需痛点挖掘，请额外上传评论数据：
+    - 评论星级
+    - 评论正文
     """)
 
 st.divider()
@@ -213,184 +327,208 @@ st.subheader("📤 上传数据文件")
 # 根据路线显示不同的上传说明
 if "路线二" in route:
     st.info("""
-    **📌 路线二数据要求：** 上传 **多个类目的 Top 10 汇总数据**
-    
-    数据应包含不同的类目/产品线，用于扫描对比哪个类目最有潜力。
-    
-    **示例数据格式：**
-    | ASIN | Title | Price | Monthly Sales | Review Count | Category |
-    |------|-------|-------|---------------|--------------|----------|
-    | B0XXX | ... | $25.99 | 5000 | 320 | Pet Supplies |
-    | B0YYY | ... | $39.99 | 3500 | 180 | Office Products |
-    
-    > 💡 如果只有单个类目的数据，请切换到【路线一】使用
+    **📌 路线二：上传多个类目的 Top 10-20 汇总数据**
+    - 用于扫描对比哪个类目最有潜力
+    - 数据应包含不同的产品线
+    - AI 会自动识别和分类
     """)
 else:
     st.info("""
-    **📌 路线一数据要求：** 上传 **目标类目的 Top 100 竞品数据**
-    
-    数据应来自同一个细分类目，用于深度分析该市场的价格带、属性机会、痛点等。
-    
-    > 💡 如果想对比多个类目，请切换到【路线二】使用
+    **📌 路线一：上传目标类目的 Top 50-100 竞品数据**
+    - 用于深度分析该类目
+    - 数据应来自同一个细分类目
+    - AI 会自动识别类目名称
     """)
 
 col1, col2 = st.columns(2)
 
 with col1:
     sales_file = st.file_uploader(
-        "📊 竞品销量/价格快照",
+        "📊 竞品数据文件",
         type=["csv", "xlsx"],
-        help="路线一：单类目Top 100数据；路线二：多类目Top 10汇总数据"
+        help="AI 会自动识别列名和数据格式"
     )
 
 with col2:
     review_file = st.file_uploader(
-        "💬 竞品评论数据（可选）",
+        "💬 评论数据文件（可选）",
         type=["csv", "xlsx"],
         help="用于痛点挖掘"
     )
 
-# ==================== 数据处理流水线 ====================
-if sales_file is not None:
+# ==================== AI 智能清洗流程 ====================
+if sales_file is not None and st.session_state.ai_client is not None:
     st.divider()
-    st.subheader("🔄 数据流水线")
+    st.subheader("🤖 AI 智能数据清洗")
     
-    # Step 1: 读取文件
-    with st.status("📂 读取数据文件...", expanded=True) as status:
-        try:
-            if sales_file.name.endswith('.csv'):
-                df_raw = pd.read_csv(sales_file)
+    # 读取文件
+    try:
+        if sales_file.name.endswith('.csv'):
+            df_raw = pd.read_csv(sales_file)
+        else:
+            df_raw = pd.read_excel(sales_file)
+        st.info(f"📄 已读取：{len(df_raw)} 行，{len(df_raw.columns)} 列")
+    except Exception as e:
+        st.error(f"❌ 文件读取失败: {e}")
+        st.stop()
+    
+    # ---- Step 1: AI 列名映射 ----
+    with st.status("🔍 Step 1: AI 识别列名...", expanded=True) as status:
+        mapping = ai_detect_columns(st.session_state.ai_client, df_raw)
+        if mapping:
+            # 应用映射
+            rename_map = {k: v for k, v in mapping.items() if v and v != "unknown"}
+            df_mapped = df_raw.rename(columns=rename_map)
+            status.update(label=f"✅ 识别了 {len(rename_map)} 列", state="complete")
+            
+            # 显示映射结果
+            with st.expander("📋 列名映射结果"):
+                st.json(mapping)
+        else:
+            df_mapped = df_raw
+            status.update(label="⚠️ 列名识别失败，使用原始列名", state="complete")
+    
+    # ---- Step 2: AI 数据类型判断 ----
+    with st.status("🧠 Step 2: AI 分析数据类型...", expanded=True) as status:
+        data_type_info = ai_detect_data_type(st.session_state.ai_client, df_mapped)
+        status.update(label=f"✅ 判断完成：{data_type_info.get('data_type', 'unknown')}", state="complete")
+        with st.expander("📋 数据类型分析"):
+            st.json(data_type_info)
+    
+    # ---- Step 3: AI 属性提取 ----
+    if "title" in df_mapped.columns or any("title" in c.lower() for c in df_mapped.columns):
+        with st.status("🏷️ Step 3: AI 提取属性（尺寸/颜色/材质）...", expanded=True) as status:
+            # 获取标题列
+            title_col = None
+            for col in df_mapped.columns:
+                if "title" in col.lower() or "标题" in col:
+                    title_col = col
+                    break
+            
+            if title_col:
+                titles = df_mapped[title_col].dropna().tolist()
+                attr_results = ai_extract_attributes(st.session_state.ai_client, titles)
+                
+                if attr_results:
+                    # 将提取的属性合并到DataFrame
+                    attr_df = pd.DataFrame(attr_results)
+                    # 合并
+                    df_with_attrs = df_mapped.copy()
+                    # 如果有索引列，匹配合并
+                    for attr_col in ["尺寸", "颜色", "材质", "款式"]:
+                        if attr_col in attr_df.columns:
+                            df_with_attrs[f"AI_{attr_col}"] = None
+                            # 简单匹配：按顺序填充
+                            for i, row in attr_df.iterrows():
+                                if i < len(df_with_attrs):
+                                    df_with_attrs.loc[i, f"AI_{attr_col}"] = row.get(attr_col)
+                    
+                    df_mapped = df_with_attrs
+                    status.update(label=f"✅ 提取了 {len(attr_results)} 条属性", state="complete")
+                    with st.expander("📋 属性提取样例"):
+                        st.dataframe(attr_df.head(10))
+                else:
+                    status.update(label="⚠️ 属性提取失败", state="complete")
             else:
-                df_raw = pd.read_excel(sales_file)
-            status.update(label=f"✅ 已读取：{len(df_raw)} 行，{len(df_raw.columns)} 列", state="complete")
-        except Exception as e:
-            st.error(f"❌ 读取失败: {e}")
-            st.stop()
-    
-    # Step 2: AI列名映射
-    with st.status("🤖 AI 列名映射...", expanded=True) as status:
-        try:
-            mapper = AIColumnMapper()
-            mapping_result = mapper.map_columns(df_raw)
-            st.session_state.mapping_result = mapping_result
-            df_mapped = mapper.apply_mapping(df_raw, mapping_result)
-            mapping_summary = mapper.get_mapping_summary(mapping_result)
-            status.update(label=f"✅ 映射完成：自动映射 {mapping_summary['auto_mapped']} 列", state="complete")
-        except Exception as e:
-            st.error(f"❌ 映射失败: {e}")
-            st.stop()
-    
-    # 显示映射详情
-    with st.expander("📋 查看列名映射详情"):
-        mapping_summary = mapper.get_mapping_summary(mapping_result)
-        mapping_df = pd.DataFrame(mapping_summary["mapping_table"])
-        st.dataframe(mapping_df, use_container_width=True)
-        st.caption(f"✅ 自动映射: {mapping_summary['auto_mapped']} | ⚠️ 需确认: {mapping_summary['needs_confirmation']} | ❌ 未识别: {mapping_summary['unmapped']}")
-    
-    # Step 3: 属性提取与标准化
-    with st.status("🏷️ 属性提取与标准化...", expanded=True) as status:
-        try:
-            normalizer = AttributeNormalizer("config.yaml")
-            if "title" in df_mapped.columns:
-                df_processed = normalizer.normalize_df_attributes(df_mapped, "title")
-                attr_summary = normalizer.get_attribute_summary(df_processed)
-                st.session_state.df_processed = df_processed
-                attr_count = len([k for k, v in attr_summary.items() if v["unique_count"] > 0])
-                status.update(label=f"✅ 识别到 {attr_count} 个属性维度", state="complete")
-            else:
-                st.warning("⚠️ 数据中缺少 'title' 列，跳过属性提取")
-                df_processed = df_mapped
-                st.session_state.df_processed = df_processed
                 status.update(label="⚠️ 未找到标题列，跳过属性提取", state="complete")
-        except Exception as e:
-            st.error(f"❌ 属性提取失败: {e}")
-            st.stop()
+    else:
+        st.info("未找到标题列，跳过属性提取")
     
-    # 显示属性分布
-    if "attr_尺寸_标准" in df_processed.columns or "attr_颜色_标准" in df_processed.columns:
-        with st.expander("📊 属性分布预览"):
-            for attr in ["尺寸", "颜色", "材质", "款式"]:
-                col_name = f"attr_{attr}"
-                if col_name in df_processed.columns:
-                    counts = df_processed[col_name].dropna().value_counts()
-                    if len(counts) > 0:
-                        st.write(f"**{attr}** (共 {len(counts)} 种值)")
-                        st.write(pd.DataFrame({
-                            "值": counts.index[:10],
-                            "出现次数": counts.values[:10]
-                        }))
-                        st.caption(f"覆盖率: {(df_processed[col_name].notna().sum() / len(df_processed)) * 100:.1f}%")
+    # ---- Step 4: AI 标准化 ----
+    # 检测是否有颜色列需要标准化
+    color_cols = [c for c in df_mapped.columns if "颜色" in c or "color" in c.lower() or "颜色" in c]
+    if color_cols:
+        with st.status("🎨 Step 4: AI 标准化颜色值...", expanded=True) as status:
+            color_col = color_cols[0]
+            color_mapping = ai_normalize_values(st.session_state.ai_client, df_mapped, color_col)
+            if color_mapping:
+                df_mapped[f"{color_col}_标准化"] = df_mapped[color_col].map(lambda x: color_mapping.get(x, x))
+                status.update(label=f"✅ 标准化了 {len(color_mapping)} 个颜色值", state="complete")
+                with st.expander("📋 颜色标准化映射"):
+                    st.json(color_mapping)
+            else:
+                status.update(label="⚠️ 颜色标准化失败", state="complete")
     
-    # ==================== 路线分流 ====================
+    # ---- 保存处理结果 ----
+    st.session_state.df_processed = df_mapped
+    
+    # ---- 展示清洗报告 ----
+    st.success("✅ AI 数据清洗完成！")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("原始列数", len(df_raw.columns))
+    with col2:
+        st.metric("处理后列数", len(df_mapped.columns))
+    
+    with st.expander("📊 查看清洗后的数据"):
+        st.dataframe(df_mapped.head(20), use_container_width=True)
+
+# ==================== 路线分析 ====================
+if st.session_state.df_processed is not None:
     st.divider()
+    df = st.session_state.df_processed
     
     if "路线二" in route:
-        # ===== 路线二：市场准入过滤器 =====
-        st.subheader("🔍 市场准入过滤器")
-        st.caption("正在扫描上传数据中的多个类目/产品，找出最有潜力的方向...")
+        # ===== 路线二：市场扫描 =====
+        st.subheader("🔍 蓝海类目扫描")
+        st.caption("AI 正在分析数据中的类目分布...")
         
-        with st.status("📊 运行市场过滤...", expanded=True) as status:
-            try:
-                filter = MarketFilter("config.yaml")
-                filter.update_thresholds(
-                    min_monthly_sales=min_sales,
-                    min_avg_price=min_price,
-                    max_avg_review_count=max_reviews,
-                    max_brand_concentration=brand_concentration
-                )
-                result = filter.filter_class(df_processed)
-                status.update(label="✅ 过滤完成", state="complete")
-            except Exception as e:
-                st.error(f"❌ 过滤失败: {e}")
-                st.stop()
+        # 检查是否有AI提取的类目信息
+        if "category" in df.columns or any("类目" in c for c in df.columns):
+            category_col = "category" if "category" in df.columns else [c for c in df.columns if "类目" in c][0]
+            category_counts = df[category_col].value_counts()
+            st.write("**类目分布：**")
+            st.bar_chart(category_counts.head(10))
         
-        # 显示结果
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            if result.passed:
-                st.success("✅ 市场准入")
-            else:
-                st.error("❌ 市场淘汰")
-        with col2:
-            st.write(result.recommendation)
-        
-        # 详细指标
-        for indicator in result.indicators:
-            st.metric(
-                label=f"{'✅' if indicator.passed else '❌'} {indicator.name}",
-                value=indicator.message,
-                delta="达标" if indicator.passed else "需调整"
+        # 运行市场过滤器
+        try:
+            filter = MarketFilter("config.yaml")
+            filter.update_thresholds(
+                min_monthly_sales=min_sales,
+                min_avg_price=min_price,
+                max_avg_review_count=max_reviews,
+                max_brand_concentration=brand_concentration
             )
-        
-        if not result.passed:
-            st.warning("🔴 该数据未通过准入过滤，建议：\n1. 扩大类目范围重新上传\n2. 或调整侧边栏阈值")
-        else:
-            st.success("🎯 发现蓝海机会！建议切换到【路线一】对该方向进行深度分析")
+            
+            # 检查是否有必要字段
+            if "price" in df.columns and "monthly_sales" in df.columns and "review_count" in df.columns:
+                result = filter.filter_class(df)
+                
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if result.passed:
+                        st.success("✅ 市场准入")
+                    else:
+                        st.error("❌ 市场淘汰")
+                with col2:
+                    st.write(result.recommendation)
+                
+                for indicator in result.indicators:
+                    st.metric(
+                        label=f"{'✅' if indicator.passed else '❌'} {indicator.name}",
+                        value=indicator.message,
+                        delta="达标" if indicator.passed else "需调整"
+                    )
+            else:
+                st.warning("数据缺少必要字段（price、monthly_sales、review_count），无法运行过滤器")
+        except Exception as e:
+            st.warning(f"市场过滤跳过: {e}")
     
     else:
-        # ===== 路线一：深度竞品分析 =====
+        # ===== 路线一：深度分析 =====
         st.subheader("🔍 深度竞品分析")
-        st.caption("正在对目标类目进行深度分析...")
         
         # 1. 价格带分析
         st.write("### 💰 价格带分析")
-        if "price" in df_processed.columns:
-            prices = df_processed["price"].dropna()
+        if "price" in df.columns:
+            prices = df["price"].dropna()
             if len(prices) > 5:
-                price_stats = {
-                    "min": prices.min(),
-                    "max": prices.max(),
-                    "mean": prices.mean(),
-                    "median": prices.median(),
-                    "q25": prices.quantile(0.25),
-                    "q75": prices.quantile(0.75),
-                }
-                
                 col1, col2, col3, col4 = st.columns(4)
-                col1.metric("最低价", f"${price_stats['min']:.0f}")
-                col2.metric("25分位", f"${price_stats['q25']:.0f}")
-                col3.metric("中位数", f"${price_stats['median']:.0f}")
-                col4.metric("75分位", f"${price_stats['q75']:.0f}")
+                col1.metric("最低价", f"${prices.min():.0f}")
+                col2.metric("中位数", f"${prices.median():.0f}")
+                col3.metric("75分位", f"${prices.quantile(0.75):.0f}")
+                col4.metric("最高价", f"${prices.max():.0f}")
                 
                 # 检测价格断层
                 sorted_prices = sorted(prices)
@@ -401,133 +539,46 @@ if sales_file is not None:
                         gaps.append({
                             "断层起始": f"${sorted_prices[i-1]:.0f}",
                             "断层结束": f"${sorted_prices[i]:.0f}",
-                            "差价": f"${diff:.0f}",
-                            "涨幅": f"{diff / sorted_prices[i-1] * 100:.0f}%"
+                            "差价": f"${diff:.0f}"
                         })
-                
                 if gaps:
                     st.success(f"💰 发现 {len(gaps)} 个价格断层")
                     st.dataframe(pd.DataFrame(gaps[:5]), use_container_width=True)
-                else:
-                    st.info("未发现明显价格断层，市场定价较为连续")
         
-        # 2. 评论痛点挖掘
-        if review_file is not None:
-            st.write("### 🔧 差评痛点挖掘")
-            
-            with st.status("📖 分析评论数据...", expanded=True) as status:
-                try:
-                    if review_file.name.endswith('.csv'):
-                        reviews_df = pd.read_csv(review_file)
-                    else:
-                        reviews_df = pd.read_excel(review_file)
-                    
-                    review_mapper = AIColumnMapper()
-                    review_mapping = review_mapper.map_columns(reviews_df)
-                    reviews_mapped = review_mapper.apply_mapping(reviews_df, review_mapping)
-                    
-                    analyzer = CommentAnalyzer(st.session_state.ai_client)
-                    pain_points = analyzer.extract_pain_points(reviews_mapped, min_mentions=3)
-                    st.session_state.pain_points = pain_points
-                    
-                    status.update(label=f"✅ 发现 {len(pain_points)} 个痛点", state="complete")
-                except Exception as e:
-                    st.error(f"❌ 分析失败: {e}")
-                    st.stop()
-            
-            if pain_points:
-                pain_data = []
-                for pp in pain_points[:10]:
-                    pain_data.append({
-                        "痛点": pp.keyword,
-                        "提及次数": pp.mention_count,
-                        "提及率": f"{pp.mention_rate:.1%}",
-                        "代表评论": pp.sample_reviews[0][:80] + "..." if pp.sample_reviews else "",
-                    })
-                
-                st.dataframe(pd.DataFrame(pain_data), use_container_width=True)
-                
-                if st.session_state.ai_client and st.button("🤖 AI生成解决方案", use_container_width=True):
-                    with st.spinner("AI 正在生成建议..."):
-                        for pp in pain_points[:5]:
-                            if pp.mention_rate > 0.05:
-                                solutions = st.session_state.ai_client.generate_solutions(
-                                    pain_point=pp.keyword,
-                                    product_name="该类目产品"
-                                )
-                                pp.suggested_solution = "; ".join(solutions) if solutions else None
-                    
-                    st.write("#### 💡 AI 改良建议")
-                    for pp in pain_points[:5]:
-                        if pp.suggested_solution:
-                            st.info(f"**{pp.keyword}** (提及率 {pp.mention_rate:.1%})\n→ {pp.suggested_solution}")
-            else:
-                st.info("未发现明显痛点，或评论数量不足")
-        
-        # 3. 趋势分析
-        st.write("### 📈 趋势分析")
-        st.caption("需要上传包含多个月份/季度历史数据的文件才能进行趋势分析")
-        
-        date_cols = [c for c in df_processed.columns if c.startswith("202") or c.startswith("20")]
-        if date_cols:
-            with st.status("📊 分析趋势...", expanded=True) as status:
-                try:
-                    analyzer = TrendAnalyzer()
-                    df_melted = df_processed.melt(
-                        id_vars=[c for c in df_processed.columns if c not in date_cols],
-                        value_vars=date_cols,
-                        var_name="date",
-                        value_name="sales"
-                    )
-                    
-                    if "attr_尺寸_标准" in df_processed.columns:
-                        result = analyzer.analyze_sales_trend(
-                            df_melted, "date", "sales", "attr_尺寸_标准"
-                        )
-                        if "grouped" in result:
-                            st.write("**各尺寸趋势**")
-                            trend_data = []
-                            for group, info in result["grouped"].items():
-                                trend_data.append({
-                                    "属性": group,
-                                    "趋势": info["trend_type"],
-                                    "最新销量": info["latest_value"] if info["latest_value"] else 0
-                                })
-                            st.dataframe(pd.DataFrame(trend_data), use_container_width=True)
-                    else:
-                        result = analyzer.analyze_sales_trend(
-                            df_melted, "date", "sales", None
-                        )
-                        st.metric("整体趋势", result.get("trend_type", "数据不足"))
-                    
-                    status.update(label="✅ 趋势分析完成", state="complete")
-                except Exception as e:
-                    st.warning(f"趋势分析跳过: {e}")
-        else:
-            st.info("📅 未检测到日期列，请上传包含月度历史数据的文件")
-        
-        # ==================== 生成报告 ====================
+        # 2. 属性分布
+        attr_cols = ["AI_尺寸", "AI_颜色", "AI_材质", "AI_款式"]
+        for attr in attr_cols:
+            if attr in df.columns:
+                counts = df[attr].dropna().value_counts()
+                if len(counts) > 0:
+                    st.write(f"### 📊 {attr.replace('AI_', '')}分布")
+                    st.dataframe(pd.DataFrame({
+                        "值": counts.index[:10],
+                        "出现次数": counts.values[:10]
+                    }), use_container_width=True)
+    
+    # ==================== 生成报告 ====================
+    if "路线一" in route:
         st.divider()
         
         if st.button("🚀 生成产品定义报告", type="primary", use_container_width=True):
             st.subheader("📄 产品定义报告")
             
             with st.spinner("AI 正在生成报告..."):
+                # 准备数据
                 price_gap_analysis = {
-                    "avg_price": df_processed["price"].mean() if "price" in df_processed.columns else 0
+                    "avg_price": df["price"].mean() if "price" in df.columns else 0
                 }
                 
                 attribute_opportunities = {}
-                if "attr_尺寸_标准" in df_processed.columns:
-                    sizes = df_processed["attr_尺寸_标准"].dropna().value_counts()
+                if "AI_尺寸" in df.columns:
+                    sizes = df["AI_尺寸"].dropna().value_counts()
                     if len(sizes) > 0:
                         attribute_opportunities["尺寸"] = {
-                            "top_values": sizes.index[:3].tolist(),
-                            "top_opportunity": sizes.index[0] if len(sizes) > 0 else ""
+                            "top_values": sizes.index[:3].tolist()
                         }
-                
-                if "attr_颜色_标准" in df_processed.columns:
-                    colors = df_processed["attr_颜色_标准"].dropna().value_counts()
+                if "AI_颜色" in df.columns:
+                    colors = df["AI_颜色"].dropna().value_counts()
                     if len(colors) > 0:
                         attribute_opportunities["颜色"] = {
                             "top_values": colors.index[:3].tolist()
@@ -547,4 +598,4 @@ if sales_file is not None:
 
 # ==================== 页脚 ====================
 st.divider()
-st.caption("🔍 ABA利基分析工具 v5.0 | 产品开发决策引擎 | 数据驱动 · AI赋能")
+st.caption("🔍 ABA利基分析工具 v5.0 | AI驱动数据清洗 | 数据驱动 · AI赋能")
