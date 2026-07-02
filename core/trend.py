@@ -1,79 +1,112 @@
 """
-卖点趋势验证模块 - 九象限判断矩阵
+ABA利基分析工具 v5.0 - 趋势分析
+功能：计算季度环比（QoQ）、判断市场生命周期
 """
 
-from typing import Dict, Any, List
 import pandas as pd
+import numpy as np
+from typing import Dict, List, Tuple, Optional
 
-
-def trend_verification(market: Dict[str, Any], trend_df: pd.DataFrame) -> Dict[str, Any]:
-    if trend_df is None or trend_df.empty:
-        return {"status": "数据不足", "quadrant": "未知", "conclusion": "无法判断", "strategy": "建议补充趋势验证数据"}
+class TrendAnalyzer:
+    """趋势分析器"""
     
-    name = market.get('name', '')
-    matched = trend_df[trend_df['modifier'].str.contains(name, case=False, na=False)]
-    if matched.empty:
-        return {"status": "无匹配数据", "quadrant": "未知", "conclusion": "无法判断", "strategy": "建议补充该卖点的趋势数据"}
+    def __init__(self, growth_threshold: float = 0.15, decline_threshold: float = -0.05, stable_threshold: float = 0.05):
+        self.growth_threshold = growth_threshold
+        self.decline_threshold = decline_threshold
+        self.stable_threshold = stable_threshold
     
-    sales_changes = []
-    price_changes = []
-    for _, row in matched.iterrows():
-        if row.get('initial_monthly_sales') and row.get('current_monthly_sales'):
-            try:
-                change = (row['current_monthly_sales'] - row['initial_monthly_sales']) / row['initial_monthly_sales'] * 100
-                sales_changes.append(change)
-            except:
-                pass
-        if row.get('initial_price') and row.get('current_price'):
-            try:
-                change = (row['current_price'] - row['initial_price']) / row['initial_price'] * 100
-                price_changes.append(change)
-            except:
-                pass
+    def calculate_qoq(self, series: pd.Series) -> pd.Series:
+        """计算季度环比增长率"""
+        return series.pct_change() * 100
     
-    if not sales_changes or not price_changes:
-        return {"status": "数据不完整", "quadrant": "未知", "conclusion": "无法判断", "strategy": "请确保趋势验证表包含销量和价格数据"}
+    def classify_trend(self, qoq_values: List[float]) -> str:
+        """
+        根据连续季度的QoQ判断趋势类型
+        - "红利期": 连续2个季度增长 > 15%
+        - "衰退期": 连续2个季度下滑 > 5%
+        - "常青款": 波动在 ±5% 以内
+        - "波动期": 其他情况
+        """
+        if len(qoq_values) < 2:
+            return "数据不足"
+        
+        last_two = qoq_values[-2:]
+        if all(v > self.growth_threshold * 100 for v in last_two):
+            return "红利期（高速增长）"
+        elif all(v < self.decline_threshold * 100 for v in last_two):
+            return "衰退期（持续下滑）"
+        elif all(abs(v) < self.stable_threshold * 100 for v in last_two):
+            return "常青款（稳定市场）"
+        else:
+            return "波动期（需谨慎）"
     
-    avg_sales_change = sum(sales_changes) / len(sales_changes)
-    avg_price_change = sum(price_changes) / len(price_changes)
-    quadrant, conclusion, strategy, color = determine_quadrant(avg_sales_change, avg_price_change)
+    def analyze_sales_trend(self, df: pd.DataFrame, date_col: str, sales_col: str, group_col: Optional[str] = None) -> Dict:
+        """
+        分析销量趋势
+        
+        Args:
+            df: DataFrame
+            date_col: 日期列名（如 "2025-01"）
+            sales_col: 销量列名
+            group_col: 分组列（如属性值），None则整体分析
+        
+        Returns:
+            {
+                "trend_type": str,
+                "qoq_values": list,
+                "forecast": str,
+                "details": dict
+            }
+        """
+        # 按日期排序
+        df_sorted = df.sort_values(date_col).copy()
+        
+        if group_col and group_col in df.columns:
+            # 分组分析
+            results = {}
+            for group, group_df in df_sorted.groupby(group_col):
+                monthly = group_df.groupby(date_col)[sales_col].sum()
+                qoq = self.calculate_qoq(monthly)
+                trend_type = self.classify_trend(qoq.dropna().tolist())
+                results[group] = {
+                    "trend_type": trend_type,
+                    "qoq_values": qoq.dropna().tolist(),
+                    "latest_value": monthly.iloc[-1] if len(monthly) > 0 else None
+                }
+            return {"grouped": results}
+        else:
+            # 整体分析
+            monthly = df_sorted.groupby(date_col)[sales_col].sum()
+            qoq = self.calculate_qoq(monthly)
+            trend_type = self.classify_trend(qoq.dropna().tolist())
+            return {
+                "trend_type": trend_type,
+                "qoq_values": qoq.dropna().tolist(),
+                "latest_value": monthly.iloc[-1] if len(monthly) > 0 else None,
+                "last_4_quarters": monthly.tail(4).to_dict()
+            }
     
-    return {
-        "status": "分析完成",
-        "avg_sales_change": round(avg_sales_change, 1),
-        "avg_price_change": round(avg_price_change, 1),
-        "sample_size": len(matched),
-        "quadrant": quadrant,
-        "conclusion": conclusion,
-        "strategy": strategy,
-        "color": color
-    }
-
-
-def determine_quadrant(sales_change: float, price_change: float) -> tuple:
-    sales_up = sales_change > 15
-    sales_down = sales_change < -15
-    sales_stable = -15 <= sales_change <= 15
-    price_up = price_change > 5
-    price_down = price_change < -5
-    price_stable = -5 <= price_change <= 5
-    
-    if sales_up and price_up:
-        return ("🟢 完全接受（蓝海）", "可进", "立即进入，撇脂定价，抢占核心关键词", "#27ae60")
-    elif sales_up and price_stable:
-        return ("🟢 稳定增长（潜力市场）", "可进", "快速跟进，跟随定价，聚焦长尾词", "#2e86c1")
-    elif sales_up and price_down:
-        return ("🟡 竞争加剧（微蓝海）", "谨慎", "差异化进入，成本领先或高附加值定位", "#f39c12")
-    elif sales_stable and price_up:
-        return ("🟡 品质溢价（小众高客单）", "可进", "差异化进入高端，极致体验", "#f39c12")
-    elif sales_stable and price_stable:
-        return ("🟠 成熟稳定（红海）", "不建议", "除非有颠覆性创新，否则不建议进入", "#e67e22")
-    elif sales_stable and price_down:
-        return ("🟠 价格战（红海）", "不建议", "避免价格战陷阱，寻找差异化机会", "#e67e22")
-    elif sales_down and price_up:
-        return ("🔴 虚高泡沫（不可持续）", "放弃", "不建议进入，等待泡沫破裂", "#e74c3c")
-    elif sales_down and price_stable:
-        return ("🟠 衰退前兆（不建议）", "不建议", "寻找替代机会，不建议进入", "#e67e22")
-    elif sales_down and price_down:
-        return ("🔴 快速衰退（放弃）", "放弃", "坚决不进入，市场正在萎缩", "#c0392b")
-    return ("未知", "无法判断", "数据异常，请检查数据", "#95a5a6")
+    def cross_validate_with_aba(self, sales_qoq: List[float], aba_qoq: List[float]) -> Dict:
+        """
+        交叉验证销量趋势与ABA搜索趋势是否一致
+        """
+        if len(sales_qoq) != len(aba_qoq) or len(sales_qoq) < 2:
+            return {"status": "数据不足", "message": "请提供至少2个季度的数据"}
+        
+        # 计算方向一致性
+        sales_directions = [1 if v > 0 else (-1 if v < 0 else 0) for v in sales_qoq[-2:]]
+        aba_directions = [1 if v > 0 else (-1 if v < 0 else 0) for v in aba_qoq[-2:]]
+        
+        consistent = sum(1 for s, a in zip(sales_directions, aba_directions) if s == a)
+        
+        if consistent == 2:
+            status = "✅ 趋势一致（高置信度）"
+            message = "销量与搜索量趋势同步，市场需求真实可靠"
+        elif consistent == 1:
+            status = "⚠️ 趋势部分一致（中等置信度）"
+            message = "建议结合其他数据（如竞品动作）进一步验证"
+        else:
+            status = "❌ 趋势背离（低置信度）"
+            message = "销量上涨但搜索量未增长，可能由于促销或库存变动，需警惕"
+        
+        return {"status": status, "message": message, "consistency_score": consistent / 2}
