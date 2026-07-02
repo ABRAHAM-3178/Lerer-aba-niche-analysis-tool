@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Any
 # 将项目根目录加入路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# 导入核心模块
+# 导入核心模块 - 直接从 ai_client 导入，避免 __init__.py 干扰
 from utils.ai_client import create_deepseek_client, AIClient
 from core.market_filter import MarketFilter
 from core.trend import TrendAnalyzer
