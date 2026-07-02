@@ -1,15 +1,8 @@
 """
-工具模块
+ABA利基分析工具 v5.0 - Utils 模块
+导出 AI 客户端和其他工具
 """
 
-from .constants import *
-from .validators import validate_file, validate_all_files
-from .ai_client import AIClient
-from .prompts import *
+from .ai_client import AIClient, create_deepseek_client
 
-__all__ = [
-    "constants",
-    "validators",
-    "AIClient",
-    "prompts"
-]
+__all__ = ["AIClient", "create_deepseek_client"]
