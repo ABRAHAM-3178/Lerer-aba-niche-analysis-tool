@@ -11,15 +11,13 @@ from .parser import extract_modifiers, get_modifier_category
 def semantic_clustering(aba_result: Dict[str, Any], category: str = "",
                         use_ai: bool = False, api_key: str = None,
                         model: str = None, base_url: str = None) -> List[Dict[str, Any]]:
-    """
-    对非品牌关键词进行语义聚类（支持AI模式）
-    """
-    non_brand = aba_result.get('non_brand_keywords', [])
+    """对非品牌关键词进行语义聚类"""
     
+    non_brand = aba_result.get('non_brand_keywords', [])
     if not non_brand:
         return []
     
-    # ===== AI 模式 =====
+    # AI 模式
     if use_ai and api_key:
         try:
             from utils.ai_client import AIClient
@@ -58,13 +56,11 @@ def semantic_clustering(aba_result: Dict[str, Any], category: str = "",
         except Exception as e:
             print(f"⚠️ AI 聚类失败，回退到本地词库: {e}")
     
-    # ===== 本地词库聚类（回退） =====
+    # 本地词库聚类
     clusters = defaultdict(list)
-    
     for item in non_brand:
         term = item.get('search_term', '')
         modifiers = extract_modifiers(term)
-        
         for mod in modifiers:
             cat = get_modifier_category(mod)
             if cat != "其他":
@@ -78,7 +74,6 @@ def semantic_clustering(aba_result: Dict[str, Any], category: str = "",
                     if item in clusters[category_name]:
                         break
     
-    # 如果没有聚类结果，按高频词聚类
     if len(clusters) == 0:
         top_mods = aba_result.get('top_modifiers', [])[:5]
         for mod, _ in top_mods:
@@ -90,11 +85,9 @@ def semantic_clustering(aba_result: Dict[str, Any], category: str = "",
     for cluster_name, items in clusters.items():
         if len(items) < 2:
             continue
-        
         ranks = [i.get('search_frequency_rank', 999999) for i in items if i.get('search_frequency_rank')]
         click_shares = [i.get('click_share', 0) for i in items if i.get('click_share')]
         conversion_shares = [i.get('conversion_share', 0) for i in items if i.get('conversion_share')]
-        
         result.append({
             'name': cluster_name,
             'keyword_count': len(items),
@@ -105,6 +98,5 @@ def semantic_clustering(aba_result: Dict[str, Any], category: str = "",
             'items': items,
             'ai_generated': False
         })
-    
     result.sort(key=lambda x: x['keyword_count'], reverse=True)
     return result
