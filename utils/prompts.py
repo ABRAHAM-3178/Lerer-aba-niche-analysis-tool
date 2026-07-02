@@ -1,89 +1,64 @@
 """
-大模型提示词模板
+ABA利基分析工具 v5.0 - Prompt模板
 """
 
-CLUSTERING_PROMPT = """
-你是一个亚马逊选品分析专家。请分析以下关键词列表，将它们按【核心卖点/功能/场景】聚类。
+SYSTEM_PROMPT_ANALYST = """
+你是一位资深亚马逊产品开发专家，拥有10年以上的电商选品和产品开发经验。
+你的专长是：
+1. 分析市场数据和竞品信息
+2. 识别未被满足的消费者需求
+3. 提出可落地的产品改良建议
+4. 制定产品定价和定位策略
 
-## 规则
-1. 每个卖点类别用一个简短的名字表示
-2. 将每个关键词归入最匹配的卖点类别
-3. 如果某个关键词不属于任何明显卖点，归入"其他"
-4. 忽略品牌名，只看产品功能
+请基于数据说话，避免主观臆断。所有建议必须具体、可执行。
+"""
 
-## 关键词列表
-{keywords}
+SYSTEM_PROMPT_JSON = """
+你是一位数据分析专家。请始终以JSON格式返回结果，不要包含任何其他文字。
+"""
 
-## 输出格式
-必须输出 JSON 格式：
+PROMPT_PRICE_GAP = """
+分析以下价格分布数据，找出价格断层（即价格差距较大的区间），
+并推荐最适合新品牌切入的价格带。
+
+数据：
+{price_data}
+
+请返回JSON格式：
 {{
-  "clusters": [
-    {{"name": "降噪", "keywords": ["noise cancelling headphones", "ANC earbuds"]}}
-  ]
+    "price_gaps": [
+        {{"start": 起始价格, "end": 结束价格, "gap": 差距}}
+    ],
+    "recommended_price": "推荐价格带",
+    "reason": "推荐理由"
 }}
 """
 
-COMMENT_ANALYSIS_PROMPT = """
-你是一个产品经理。请分析以下用户评论，提取产品改进建议。
+PROMPT_PAIN_POINT = """
+分析以下差评数据，提取Top痛点和改良建议。
 
-## 规则
-1. 找出 Top 3 用户痛点
-2. 找出 Top 3 用户好评
-3. 针对痛点给出具体的产品改进建议
-4. 针对好评给出 Listing 优化建议
+差评摘要：
+{review_summary}
 
-## 评论内容
-{comments}
-
-## 输出格式
-必须输出 JSON 格式：
+请返回JSON格式：
 {{
-  "pains": ["痛点1", "痛点2", "痛点3"],
-  "praises": ["好评1", "好评2", "好评3"],
-  "product_suggestions": ["改进建议1", "改进建议2"],
-  "listing_suggestions": ["优化建议1", "优化建议2"]
+    "pain_points": [
+        {{"keyword": "痛点关键词", "mention_rate": "提及率", "suggestion": "改良建议"}}
+    ]
 }}
 """
 
-REPORT_SUMMARY_PROMPT = """
-你是一个亚马逊选品顾问。请根据以下分析数据，生成一段 200 字以内的总结建议。
+PROMPT_PRODUCT_DEFINITION = """
+根据以下市场分析数据，生成产品定义报告：
 
-## 分析数据
-- 市场名称: {market_name}
-- 综合评分: {score} 分 ({grade}级)
-- 关键词数: {keyword_count}
-- 主要卖点: {top_modifiers}
+类目：{class_name}
+价格分析：{price_analysis}
+痛点分析：{pain_analysis}
+属性机会：{attribute_analysis}
 
-## 输出要求
-用专业、简洁的中文输出，重点说明：
-1. 该市场当前的竞争态势
-2. 进入建议（优先/谨慎/放弃）
-3. 关键的差异化方向
+请按以下格式输出：
+1. 目标人群画像
+2. 战略定价建议
+3. 核心差异化卖点
+4. 产品定义总结
 """
-
-
-def build_clustering_messages(keywords: list) -> list:
-    return [
-        {"role": "system", "content": "你是一个亚马逊选品分析专家，擅长语义聚类。"},
-        {"role": "user", "content": CLUSTERING_PROMPT.format(keywords=", ".join(keywords[:100]))}
-    ]
-
-
-def build_comment_messages(comments: list) -> list:
-    return [
-        {"role": "system", "content": "你是一个产品经理，擅长从用户反馈中挖掘洞察。"},
-        {"role": "user", "content": COMMENT_ANALYSIS_PROMPT.format(comments="\n".join(comments[:30]))}
-    ]
-
-
-def build_summary_messages(data: dict) -> list:
-    return [
-        {"role": "system", "content": "你是一个亚马逊选品顾问，擅长总结和给出建议。"},
-        {"role": "user", "content": REPORT_SUMMARY_PROMPT.format(
-            market_name=data.get("name", "未知"),
-            score=data.get("final_score", 0),
-            grade=data.get("grade", "C"),
-            keyword_count=data.get("keyword_count", 0),
-            top_modifiers="、".join(data.get("keywords", [])[:3])
-        )}
-    ]
