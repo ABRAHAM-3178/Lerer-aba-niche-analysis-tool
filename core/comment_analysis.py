@@ -1,141 +1,145 @@
 """
-评论挖掘模块（支持AI分析）
+ABA利基分析工具 v5.0 - 评论分析模块（增强版）
+功能：1-3星差评痛点挖掘 + 提及率计算 + AI总结
 """
 
-from typing import Dict, Any, List
 import pandas as pd
-from collections import Counter, defaultdict
+from typing import List, Dict, Tuple, Optional
+from collections import Counter
 import re
+from dataclasses import dataclass
+
+@dataclass
+class PainPoint:
+    """痛点数据结构"""
+    keyword: str
+    mention_count: int
+    mention_rate: float  # 提及率（提及次数/总评论数）
+    sample_reviews: List[str]  # 代表性评论样本
+    suggested_solution: Optional[str] = None  # AI建议的解决方案
 
 
-POSITIVE_WORDS = {
-    '好', '棒', '赞', '喜欢', '满意', '推荐', '值得', '不错', '优秀',
-    'amazing', 'great', 'good', 'excellent', 'perfect', 'best', 'love', 'like',
-    'recommend', 'satisfied', 'happy', 'wonderful', 'awesome', 'fantastic'
-}
-
-NEGATIVE_WORDS = {
-    '差', '坏', '烂', '失望', '遗憾', '后悔', '垃圾', '不行', '不好',
-    'bad', 'poor', 'terrible', 'awful', 'horrible', 'disappointed', 'regret',
-    'waste', 'broken', 'defective', 'issue', 'problem'
-}
-
-MODIFIER_KEYWORDS = {
-    "降噪": ["noise", "降噪", "安静", "耳压", "anc"],
-    "防水": ["waterproof", "water", "防水", "防泼水", "ipx"],
-    "快充": ["fast", "quick", "rapid", "快充", "闪充", "charging"],
-    "无线": ["wireless", "bluetooth", "蓝牙", "无线", "连接"],
-    "舒适": ["comfort", "舒适", "舒服", "柔软", "轻", "soft"],
-    "耐用": ["durable", "耐用", "结实", "耐磨", "sturdy"],
-    "便携": ["portable", "compact", "便携", "轻便", "折叠"],
-    "音质": ["sound", "bass", "音质", "音效", "清晰", "audio"],
-    "续航": ["battery", "续航", "耗电", "耐用", "电量"],
-    "外观": ["design", "style", "外观", "颜值", "好看", "漂亮"],
-}
-
-
-def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None,
-                     use_ai: bool = False, api_key: str = None,
-                     model: str = None, base_url: str = None) -> List[Dict[str, Any]]:
+class CommentAnalyzer:
+    """评论分析器 - 专注于痛点挖掘"""
     
-    if review_df is None or review_df.empty:
-        return []
+    def __init__(self, ai_client=None):
+        self.ai_client = ai_client
+        
+        # 停用词：过滤掉主观情绪词
+        self.stopwords = {
+            "disappointed", "disappointing", "terrible", "awful", "horrible",
+            "very", "really", "extremely", "absolutely", "completely",
+            "so", "too", "much", "more", "less", "just", "even", "then", "than"
+        }
     
-    results = []
+    def extract_pain_points(self, reviews_df: pd.DataFrame, 
+                           min_mentions: int = 3) -> List[PainPoint]:
+        """
+        从1-3星评论中提取痛点
+        
+        Args:
+            reviews_df: 需包含 review_star, review_body 列
+            min_mentions: 痛点的最低提及次数
+        
+        Returns:
+            按提及率降序排列的痛点列表
+        """
+        # 筛选1-3星评论
+        low_rating = reviews_df[reviews_df["review_star"] <= 3]
+        
+        if len(low_rating) == 0:
+            return []
+        
+        # 提取所有评论正文
+        bodies = low_rating["review_body"].dropna().tolist()
+        total_comments = len(bodies)
+        
+        # 提取名词短语和动宾结构（简化版：用标点和关键词分割）
+        pain_patterns = self._extract_patterns(bodies)
+        
+        # 统计提及次数
+        pain_counts = Counter()
+        for body in bodies:
+            body_lower = body.lower()
+            for pattern in pain_patterns:
+                if pattern.lower() in body_lower:
+                    pain_counts[pattern] += 1
+        
+        # 构建痛点列表
+        pain_points = []
+        for keyword, count in pain_counts.most_common(20):
+            if count >= min_mentions:
+                # 找到代表性评论
+                sample_reviews = []
+                for body in bodies:
+                    if keyword.lower() in body.lower() and len(sample_reviews) < 3:
+                        sample_reviews.append(body[:200] + "..." if len(body) > 200 else body)
+                
+                pain_points.append(PainPoint(
+                    keyword=keyword,
+                    mention_count=count,
+                    mention_rate=count / total_comments if total_comments > 0 else 0,
+                    sample_reviews=sample_reviews,
+                    suggested_solution=None  # 后续调用AI生成
+                ))
+        
+        return pain_points
     
-    if use_ai and api_key:
-        try:
-            from utils.ai_client import AIClient
-            from utils.prompts import build_comment_messages
-            client = AIClient(api_key=api_key, model=model, base_url=base_url)
-            for asin, group in review_df.groupby('asin'):
-                if len(group) < 200:
-                    continue
-                texts = group['review_body'].astype(str).tolist()
-                comments_text = "\n".join(texts[:30])
-                messages = build_comment_messages([comments_text])
-                ai_result = client.chat_json(messages)
-                results.append({
-                    'asin': asin,
-                    'review_count': len(group),
-                    'depth': '⭐⭐⭐ 深度分析 (AI)',
-                    'avg_rating': round(group['rating'].mean(), 2),
-                    'positive_ratio': round((group['rating'] >= 4).sum() / len(group) * 100, 1),
-                    'top_pains': ai_result.get('pains', [])[:5],
-                    'top_praises': ai_result.get('praises', [])[:5],
-                    'product_suggestions': ai_result.get('product_suggestions', []),
-                    'listing_suggestions': ai_result.get('listing_suggestions', [])
-                })
-            return results
-        except Exception as e:
-            print(f"⚠️ AI 评论分析失败，回退到本地逻辑: {e}")
+    def _extract_patterns(self, bodies: List[str]) -> List[str]:
+        """从评论中提取常见痛点模式"""
+        patterns = []
+        
+        # 常见痛点关键词
+        keywords = [
+            # 物理缺陷
+            "broken", "cracked", "bent", "wobbly", "unstable", "loose", 
+            "damaged", "scratch", "dent", "chip", "rust", "corrosion",
+            "thin", "flimsy", "cheap material", "low quality",
+            # 功能问题
+            "not work", "doesn't work", "failed", "stop working", "dead",
+            "noise", "loud", "squeaky", "creaky", "clicking",
+            "slow", "stuck", "jam", "blocked", "leak",
+            # 配件问题
+            "missing part", "missing screw", "wrong size", "wrong color",
+            "hard to assemble", "difficult to install", "instructions unclear",
+            # 舒适度/体验
+            "uncomfortable", "not fit", "too small", "too large", "too heavy",
+            "not stable", "tips over", "falls over",
+        ]
+        
+        for keyword in keywords:
+            patterns.append(keyword)
+            patterns.append(f"it {keyword}")  # "it broke"
+            patterns.append(f"was {keyword}")  # "was broken"
+            patterns.append(f"is {keyword}")   # "is broken"
+        
+        return patterns
     
-    for asin, group in review_df.groupby('asin'):
-        if len(group) < 50:
-            continue
-        depth = "⭐⭐⭐ 深度分析" if len(group) > 500 else ("⭐⭐ 标准分析" if len(group) > 200 else "⭐ 快速扫描")
-        texts = group['review_body'].astype(str).tolist()
-        ratings = group['rating'].tolist()
+    def generate_ai_solutions(self, pain_points: List[PainPoint], 
+                              ai_client, product_name: str = "该产品") -> List[PainPoint]:
+        """调用AI为每个痛点生成改良建议"""
+        for pp in pain_points:
+            if pp.mention_rate < 0.05:  # 提及率低于5%的不需要AI建议
+                continue
+            
+            prompt = f"""
+            你是一位资深产品开发专家。以下是消费者对【{product_name}】的差评中提及的痛点：
+            
+            痛点：{pp.keyword}
+            提及次数：{pp.mention_count}
+            提及率：{pp.mention_rate:.1%}
+            
+            代表性评论样例：
+            {chr(10).join(['- ' + s for s in pp.sample_reviews[:2]])}
+            
+            请给出2-3条具体的、可落地的产品改良建议（如：改用XX材质、增加XX结构、优化XX设计），
+            每条建议控制在30字以内。
+            """
+            
+            try:
+                response = ai_client.chat(prompt, temperature=0.7)
+                pp.suggested_solution = response.strip()
+            except Exception as e:
+                pp.suggested_solution = f"AI建议生成失败: {e}"
         
-        positive_count, negative_count = 0, 0
-        for text in texts:
-            text_lower = text.lower()
-            pos_score = sum(1 for w in POSITIVE_WORDS if w in text_lower)
-            neg_score = sum(1 for w in NEGATIVE_WORDS if w in text_lower)
-            if pos_score > neg_score:
-                positive_count += 1
-            elif neg_score > pos_score:
-                negative_count += 1
-        
-        modifier_mentions = defaultdict(int)
-        for text in texts:
-            text_lower = text.lower()
-            for modifier, keywords in MODIFIER_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in text_lower:
-                        modifier_mentions[modifier] += 1
-                        break
-        
-        negative_texts = [t for t, r in zip(texts, ratings) if r <= 3]
-        top_pains = []
-        if negative_texts:
-            neg_words = re.findall(r'[a-zA-Z\u4e00-\u9fa5]{2,}', ' '.join(negative_texts).lower())
-            neg_counts = Counter(neg_words)
-            top_pains = [w for w, c in neg_counts.most_common(10) if c > 2 and len(w) > 1]
-        
-        positive_texts = [t for t, r in zip(texts, ratings) if r >= 4]
-        top_praises = []
-        if positive_texts:
-            pos_words = re.findall(r'[a-zA-Z\u4e00-\u9fa5]{2,}', ' '.join(positive_texts).lower())
-            pos_counts = Counter(pos_words)
-            top_praises = [w for w, c in pos_counts.most_common(10) if c > 2 and len(w) > 1]
-        
-        suggestions = generate_suggestions(modifier_mentions, top_pains, top_praises, len(group))
-        results.append({
-            'asin': asin,
-            'review_count': len(group),
-            'depth': depth,
-            'avg_rating': round(sum(ratings) / len(ratings), 2),
-            'positive_ratio': round(positive_count / len(group) * 100, 1) if group else 0,
-            'top_modifiers': dict(modifier_mentions.most_common(5)),
-            'top_pains': top_pains[:5],
-            'top_praises': top_praises[:5],
-            'product_suggestions': suggestions.get('product', []),
-            'listing_suggestions': suggestions.get('listing', [])
-        })
-    
-    return results
-
-
-def generate_suggestions(modifier_mentions: dict, pains: list, praises: list, total: int) -> dict:
-    suggestions = {'product': [], 'listing': [], 'advertising': [], 'urgent': []}
-    total_mentions = sum(modifier_mentions.values()) if modifier_mentions else 1
-    for modifier, count in modifier_mentions.items():
-        if count / total > 0.3:
-            suggestions['product'].append(f"优化{modifier}功能，用户关注度高")
-    if praises:
-        suggestions['listing'].append(f"在标题/五点中突出: {', '.join(praises[:3])}")
-    if pains:
-        suggestions['advertising'].append(f"针对痛点'{pains[0]}'制作对比广告")
-        suggestions['urgent'].append(f"重点关注: {', '.join(pains[:2])}")
-    return suggestions
+        return pain_points
