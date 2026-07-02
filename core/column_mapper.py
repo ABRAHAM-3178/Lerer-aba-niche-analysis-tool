@@ -9,7 +9,8 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-# 标准字段库 - 与数据模型一一对应
+
+# 标准字段库
 STANDARD_FIELDS = {
     "asin": {"keywords": ["asin", "商品编码", "amazon standard identification number", "亚马逊编码", "商品id"]},
     "parent_asin": {"keywords": ["parent asin", "父体asin", "父asin", "父商品编码", "parent"]},
@@ -56,29 +57,21 @@ class AIColumnMapper:
         user_col_lower = user_col.lower().strip()
         standard_col_lower = standard_col.lower().strip()
         
-        # 1. 精确匹配
         if user_col_lower == standard_col_lower:
             return 1.0
         
-        # 2. 关键词匹配（标准字段的keywords）
         std_info = self.standard_fields.get(standard_col_lower, {})
         for keyword in std_info.get("keywords", []):
             if keyword in user_col_lower:
                 return 0.95
         
-        # 3. 模糊匹配
         ratio = SequenceMatcher(None, user_col_lower, standard_col_lower).ratio()
-        if ratio > 0.7:
-            return ratio
-        
-        return 0.0
+        return ratio if ratio > 0.7 else 0.0
     
     def map_columns(self, df: pd.DataFrame) -> Dict[str, ColumnMappingResult]:
         """映射DataFrame的所有列名"""
         results = {}
         user_columns = df.columns.tolist()
-        
-        # 构建标准字段列表（用于候选匹配）
         standard_names = list(self.standard_fields.keys())
         
         for user_col in user_columns:
@@ -109,7 +102,7 @@ class AIColumnMapper:
         return results
     
     def apply_mapping(self, df: pd.DataFrame, mapping: Dict[str, ColumnMappingResult]) -> pd.DataFrame:
-        """应用列名映射，重命名DataFrame列"""
+        """应用列名映射"""
         rename_map = {}
         for user_col, result in mapping.items():
             if result.standard_field and not result.needs_confirmation:
@@ -120,7 +113,7 @@ class AIColumnMapper:
         return df
     
     def get_mapping_summary(self, mapping: Dict[str, ColumnMappingResult]) -> Dict:
-        """生成映射摘要，用于界面展示"""
+        """生成映射摘要"""
         summary = {
             "total_columns": len(mapping),
             "auto_mapped": 0,
