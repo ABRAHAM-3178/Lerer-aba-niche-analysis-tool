@@ -13,14 +13,12 @@ class AIClient:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url or "https://api.openai.com/v1"
-        
         self.client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.base_url
         )
     
     def chat_json(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> dict:
-        """发送对话请求，期望返回 JSON 格式"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -34,7 +32,6 @@ class AIClient:
             raise RuntimeError(f"AI API 调用失败: {e}")
     
     def chat_text(self, messages: List[Dict[str, str]], temperature: float = 0.5) -> str:
-        """发送对话请求，返回纯文本"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
