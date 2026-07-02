@@ -1,86 +1,178 @@
 """
-Excel报告生成模块（支持AI摘要）
+ABA利基分析工具 v5.0 - 报告生成器（黄金三角收敛）
+输出：产品定义报告（价格、人群、卖点）
 """
 
 import pandas as pd
-import io
+from typing import Dict, List, Optional
 from datetime import datetime
-from typing import List, Dict, Any
+from dataclasses import dataclass
+
+@dataclass
+class ProductDefinition:
+    """黄金三角产品定义"""
+    target_audience: str  # 目标人群
+    strategic_price: str  # 战略定价
+    core_usps: List[str]  # 核心差异化卖点
+    solved_pain_points: List[str]  # 解决的痛点
+    product_name: str  # 具体产品名称
+    summary: str  # 一句话总结
 
 
-def generate_excel_report(
-    scored_markets: List[Dict[str, Any]],
-    data: Dict[str, pd.DataFrame],
-    comment_insights: List[Dict[str, Any]],
-    project_name: str,
-    category: str,
-    date_range: list,
-    use_ai: bool = False,
-    api_key: str = None,
-    model: str = None,
-    base_url: str = None
-) -> bytes:
+class ReportGenerator:
+    """生成黄金三角产品定义报告"""
     
-    if use_ai and api_key and scored_markets:
-        try:
-            from utils.ai_client import AIClient
-            from utils.prompts import build_summary_messages
-            client = AIClient(api_key=api_key, model=model, base_url=base_url)
-            for market in scored_markets:
-                try:
-                    messages = build_summary_messages(market)
-                    market['ai_summary'] = client.chat_text(messages)
-                except Exception as e:
-                    market['ai_summary'] = f"AI摘要生成失败: {e}"
-        except Exception as e:
-            print(f"⚠️ AI 摘要生成失败: {e}")
-            for market in scored_markets:
-                market['ai_summary'] = "AI摘要生成失败，请检查API配置"
+    def __init__(self, ai_client=None):
+        self.ai_client = ai_client
     
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_overview = pd.DataFrame(scored_markets)
-        if 'ai_summary' in df_overview.columns:
-            cols = ['name', 'grade', 'final_score', 'keyword_count', 'weight_level',
-                    'market_size_score', 'conversion_score', 'competition_score',
-                    'growth_score', 'profit_score', 'brand_monopoly_score',
-                    'new_product_score', 'modifier_acceptance_score',
-                    'price_elasticity_score', 'seasonality_score',
-                    'ai_summary', 'keywords']
-            available_cols = [c for c in cols if c in df_overview.columns]
-            df_overview = df_overview[available_cols]
-        df_overview.to_excel(writer, sheet_name='细分市场总览', index=False)
+    def generate_product_definition_report(
+        self,
+        class_name: str,
+        price_gap_analysis: Dict,
+        pain_points: List,
+        attribute_opportunities: Dict,
+        trend_analysis: Dict
+    ) -> ProductDefinition:
+        """
+        生成产品定义报告
         
-        if 'keyword' in data and data['keyword'] is not None:
-            df_keyword = data['keyword'].copy()
-            df_keyword.to_excel(writer, sheet_name='关键词明细', index=False)
+        Args:
+            class_name: 类目名称
+            price_gap_analysis: 价格带分析结果
+            pain_points: 痛点列表
+            attribute_opportunities: 属性机会矩阵
+            trend_analysis: 趋势分析结果
+        """
+        # 1. 提取目标人群（从评论中反推）
+        target_audience = self._infer_audience(pain_points, attribute_opportunities)
         
-        if 'asin' in data and data['asin'] is not None:
-            df_asin = data['asin'].copy()
-            df_asin.to_excel(writer, sheet_name='ASIN排行', index=False)
+        # 2. 确定战略定价
+        strategic_price = self._determine_price(price_gap_analysis)
         
-        if comment_insights:
-            df_comment = pd.DataFrame(comment_insights)
-            cols = ['asin', 'review_count', 'depth', 'avg_rating', 'positive_ratio',
-                    'top_pains', 'top_praises', 'product_suggestions', 'listing_suggestions']
-            available_cols = [c for c in cols if c in df_comment.columns]
-            df_comment = df_comment[available_cols]
-            df_comment.to_excel(writer, sheet_name='评论洞察与优化', index=False)
+        # 3. 提取核心卖点
+        core_usps = self._extract_usps(pain_points, attribute_opportunities)
         
-        df_timing = pd.DataFrame([{
-            '细分市场': m.get('name', ''),
-            '等级': m.get('grade', ''),
-            '综合分': m.get('final_score', 0),
-            '推荐入场时间': '建议3-6个月内',
-            '备货建议': '首批1-2个月销量'
-        } for m in scored_markets])
-        df_timing.to_excel(writer, sheet_name='入场时机规划', index=False)
+        # 4. 痛点清单
+        solved_pain_points = [pp.keyword for pp in pain_points[:3] if pp.mention_rate > 0.05]
         
-        df_trend = pd.DataFrame([{
-            '卖点': m.get('name', ''),
-            '等级': m.get('grade', ''),
-            '综合分': m.get('final_score', 0)
-        } for m in scored_markets])
-        df_trend.to_excel(writer, sheet_name='卖点趋势验证', index=False)
+        # 5. 产品名称生成
+        product_name = f"{class_name} 升级款" if core_usps else class_name
+        
+        # 6. 一句话总结
+        summary = f"我们要为【{target_audience}】，提供一款定价在【{strategic_price}】，通过【{', '.join(core_usps[:2])}】解决【{solved_pain_points[0] if solved_pain_points else '核心痛点'}】的【{product_name}】。"
+        
+        return ProductDefinition(
+            target_audience=target_audience,
+            strategic_price=strategic_price,
+            core_usps=core_usps,
+            solved_pain_points=solved_pain_points,
+            product_name=product_name,
+            summary=summary
+        )
     
-    return output.getvalue()
+    def _infer_audience(self, pain_points: List, attribute_opportunities: Dict) -> str:
+        """从痛点中推断目标人群"""
+        # 简版：从高频痛点反推
+        audience_keywords = {
+            "small": "小户型/紧凑空间用户",
+            "large": "大户型/多人使用场景",
+            "heavy": "重度使用者/工业场景",
+            "light": "轻量使用/家庭场景",
+            "budget": "价格敏感型用户",
+            "premium": "品质追求型用户",
+        }
+        
+        for pp in pain_points[:5]:
+            for key, audience in audience_keywords.items():
+                if key in pp.keyword.lower():
+                    return audience
+        
+        return "大众消费市场"
+    
+    def _determine_price(self, price_gap_analysis: Dict) -> str:
+        """确定战略定价"""
+        gaps = price_gap_analysis.get("price_gaps", [])
+        if gaps:
+            # 取第一个价格断层
+            gap = gaps[0]
+            return f"${gap['start']:.0f}-${gap['end']:.0f}（空白价格带）"
+        
+        avg_price = price_gap_analysis.get("avg_price", 25)
+        return f"${avg_price * 0.8:.0f}-${avg_price * 1.2:.0f}（主流价格带）"
+    
+    def _extract_usps(self, pain_points: List, attribute_opportunities: Dict) -> List[str]:
+        """提取核心卖点"""
+        usps = []
+        
+        # 从痛点反推卖点
+        for pp in pain_points[:3]:
+            if pp.mention_rate > 0.05:
+                if "broken" in pp.keyword or "cracked" in pp.keyword:
+                    usps.append("加固结构设计")
+                elif "noise" in pp.keyword or "loud" in pp.keyword:
+                    usps.append("静音升级")
+                elif "unstable" in pp.keyword or "wobbly" in pp.keyword:
+                    usps.append("防抖/稳定结构")
+                elif "thin" in pp.keyword or "flimsy" in pp.keyword:
+                    usps.append("加厚/加固材质")
+                elif "assembly" in pp.keyword or "install" in pp.keyword:
+                    usps.append("免工具/简易安装")
+        
+        # 从属性机会中提取
+        top_attr = attribute_opportunities.get("top_opportunity", "")
+        if top_attr and "尺寸" in attribute_opportunities:
+            size = attribute_opportunities.get("尺寸", {}).get("top_values", [])
+            if size:
+                usps.append(f"{size[0]}大尺寸升级版")
+        
+        return list(set(usps))[:3] if usps else ["性价比平替"]
+    
+    def format_report_html(self, definition: ProductDefinition, 
+                          details: Dict) -> str:
+        """生成HTML格式的报告（用于Streamlit展示）"""
+        html = f"""
+        <div style="font-family: Arial, sans-serif; padding: 20px; background: #f5f7fa; border-radius: 12px;">
+            
+            <h2 style="color: #1a73e8; border-bottom: 3px solid #1a73e8; padding-bottom: 10px;">
+                🎯 产品定义报告
+            </h2>
+            
+            <div style="background: white; padding: 20px; border-radius: 8px; margin: 16px 0;">
+                <h3 style="color: #2d3748;">📌 一句话产品定义</h3>
+                <div style="background: #e8f0fe; padding: 16px; border-radius: 8px; font-size: 18px; font-weight: 500;">
+                    {definition.summary}
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div style="background: white; padding: 16px; border-radius: 8px;">
+                    <h4 style="color: #2d3748;">👤 目标人群</h4>
+                    <p style="font-size: 16px;">{definition.target_audience}</p>
+                </div>
+                <div style="background: white; padding: 16px; border-radius: 8px;">
+                    <h4 style="color: #2d3748;">💰 战略定价</h4>
+                    <p style="font-size: 16px; font-weight: 600; color: #1a73e8;">{definition.strategic_price}</p>
+                </div>
+            </div>
+            
+            <div style="background: white; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                <h4 style="color: #2d3748;">🚀 核心差异化卖点 (USP)</h4>
+                <ul style="font-size: 15px; line-height: 1.8;">
+                    {''.join([f'<li>✅ {usp}</li>' for usp in definition.core_usps])}
+                </ul>
+            </div>
+            
+            <div style="background: white; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                <h4 style="color: #2d3748;">🔧 解决的痛点</h4>
+                <ul style="font-size: 14px; color: #4a5568;">
+                    {''.join([f'<li>🔹 {pain}' for pain in definition.solved_pain_points])}
+                </ul>
+            </div>
+            
+            <div style="background: #fefcbf; padding: 12px 16px; border-radius: 8px; border-left: 4px solid #d69e2e; margin-top: 16px;">
+                <span style="font-weight: 600;">📊 报告生成时间：</span>
+                {datetime.now().strftime('%Y-%m-%d %H:%M')}
+            </div>
+        </div>
+        """
+        return html
