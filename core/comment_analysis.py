@@ -37,30 +37,24 @@ MODIFIER_KEYWORDS = {
 def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None,
                      use_ai: bool = False, api_key: str = None,
                      model: str = None, base_url: str = None) -> List[Dict[str, Any]]:
-    """分析评论数据（支持AI模式）"""
     
     if review_df is None or review_df.empty:
         return []
     
     results = []
     
-    # ===== AI 模式：对评论数 > 200 的 ASIN 进行深度分析 =====
     if use_ai and api_key:
         try:
             from utils.ai_client import AIClient
             from utils.prompts import build_comment_messages
-            
             client = AIClient(api_key=api_key, model=model, base_url=base_url)
-            
             for asin, group in review_df.groupby('asin'):
                 if len(group) < 200:
                     continue
-                
                 texts = group['review_body'].astype(str).tolist()
                 comments_text = "\n".join(texts[:30])
                 messages = build_comment_messages([comments_text])
                 ai_result = client.chat_json(messages)
-                
                 results.append({
                     'asin': asin,
                     'review_count': len(group),
@@ -76,24 +70,14 @@ def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None,
         except Exception as e:
             print(f"⚠️ AI 评论分析失败，回退到本地逻辑: {e}")
     
-    # ===== 本地逻辑（回退） =====
     for asin, group in review_df.groupby('asin'):
         if len(group) < 50:
             continue
-        
-        if len(group) > 500:
-            depth = "⭐⭐⭐ 深度分析"
-        elif len(group) > 200:
-            depth = "⭐⭐ 标准分析"
-        else:
-            depth = "⭐ 快速扫描"
-        
+        depth = "⭐⭐⭐ 深度分析" if len(group) > 500 else ("⭐⭐ 标准分析" if len(group) > 200 else "⭐ 快速扫描")
         texts = group['review_body'].astype(str).tolist()
         ratings = group['rating'].tolist()
         
-        positive_count = 0
-        negative_count = 0
-        
+        positive_count, negative_count = 0, 0
         for text in texts:
             text_lower = text.lower()
             pos_score = sum(1 for w in POSITIVE_WORDS if w in text_lower)
@@ -113,23 +97,20 @@ def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None,
                         break
         
         negative_texts = [t for t, r in zip(texts, ratings) if r <= 3]
+        top_pains = []
         if negative_texts:
             neg_words = re.findall(r'[a-zA-Z\u4e00-\u9fa5]{2,}', ' '.join(negative_texts).lower())
             neg_counts = Counter(neg_words)
             top_pains = [w for w, c in neg_counts.most_common(10) if c > 2 and len(w) > 1]
-        else:
-            top_pains = []
         
         positive_texts = [t for t, r in zip(texts, ratings) if r >= 4]
+        top_praises = []
         if positive_texts:
             pos_words = re.findall(r'[a-zA-Z\u4e00-\u9fa5]{2,}', ' '.join(positive_texts).lower())
             pos_counts = Counter(pos_words)
             top_praises = [w for w, c in pos_counts.most_common(10) if c > 2 and len(w) > 1]
-        else:
-            top_praises = []
         
         suggestions = generate_suggestions(modifier_mentions, top_pains, top_praises, len(group))
-        
         results.append({
             'asin': asin,
             'review_count': len(group),
@@ -147,20 +128,14 @@ def analyze_comments(review_df: pd.DataFrame, asin_df: pd.DataFrame = None,
 
 
 def generate_suggestions(modifier_mentions: dict, pains: list, praises: list, total: int) -> dict:
-    """生成优化建议"""
     suggestions = {'product': [], 'listing': [], 'advertising': [], 'urgent': []}
-    
     total_mentions = sum(modifier_mentions.values()) if modifier_mentions else 1
     for modifier, count in modifier_mentions.items():
-        ratio = count / total
-        if ratio > 0.3:
+        if count / total > 0.3:
             suggestions['product'].append(f"优化{modifier}功能，用户关注度高")
-    
     if praises:
         suggestions['listing'].append(f"在标题/五点中突出: {', '.join(praises[:3])}")
-    
     if pains:
         suggestions['advertising'].append(f"针对痛点'{pains[0]}'制作对比广告")
         suggestions['urgent'].append(f"重点关注: {', '.join(pains[:2])}")
-    
     return suggestions
