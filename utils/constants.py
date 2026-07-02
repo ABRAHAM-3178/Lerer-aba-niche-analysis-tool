@@ -1,6 +1,34 @@
 """
-常量定义 - 词库、停用词、品牌词等
+ABA利基分析工具 v5.0 - 常量定义
 """
+
+APP_NAME = "ABA利基分析工具"
+APP_VERSION = "5.0.0"
+
+DEFAULT_CONFIG_PATH = "config.yaml"
+
+STANDARD_FIELDS = {
+    "asin": "ASIN",
+    "parent_asin": "父体ASIN",
+    "title": "商品标题",
+    "price": "价格",
+    "monthly_sales": "月销量",
+    "monthly_revenue": "月销售额",
+    "review_count": "评论数",
+    "rating": "评分",
+    "bsr_rank": "BSR排名",
+    "category": "类目",
+}
+
+COLOR_MAPPING = {
+    "black": "黑色",
+    "white": "白色",
+    "brown": "棕色",
+    "walnut": "胡桃色",
+    "oak": "橡木色",
+    "gray": "灰色",
+    "grey": "灰色",
+}
 
 CATEGORY_KEYWORDS = {
     "电子": ["phone", "headphone", "speaker", "charger", "cable", "adapter", "battery", "earbud", "microphone", "camera", "drone", "tablet", "laptop", "keyboard", "mouse", "monitor"],
