@@ -142,7 +142,7 @@ class AIClient:
     
     def chat_json(self, prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.3) -> Dict[str, Any]:
         """请求JSON格式响应"""
-        sys_prompt = system_prompt or "你是一位数据分析专家。请始终以JSON格式返回结果。"
+        sys_prompt = system_prompt or "你是一位数据分析专家。请始终以JSON格式返回结果，不要包含其他文字。"
         if "JSON" not in sys_prompt:
             sys_prompt += "\n\n请始终以JSON格式返回结果，不要包含其他文字。"
         
